@@ -51,6 +51,30 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
   const metricRelevance = document.getElementById("metric-relevance");
   const metricLatency = document.getElementById("metric-latency");
   const ragLatencyBadge = document.getElementById("rag-latency-badge");
+  const ragModeBadge = document.getElementById("rag-mode-badge");
+  const ragLlmProviderSelect = document.getElementById("rag-llm-provider-select");
+  const ragApiKeyGroup = document.getElementById("rag-api-key-group");
+  const ragApiKeyInput = document.getElementById("rag-api-key-input");
+
+  if (ragLlmProviderSelect) {
+    const savedKey = localStorage.getItem("safestrata_cloud_key") || "";
+    if (ragApiKeyInput) ragApiKeyInput.value = savedKey;
+
+    ragLlmProviderSelect.addEventListener("change", () => {
+      const val = ragLlmProviderSelect.value;
+      if (val === "gemini" || val === "openai" || val === "anthropic") {
+        if (ragApiKeyGroup) ragApiKeyGroup.style.display = "block";
+      } else {
+        if (ragApiKeyGroup) ragApiKeyGroup.style.display = "none";
+      }
+    });
+
+    if (ragApiKeyInput) {
+      ragApiKeyInput.addEventListener("input", () => {
+        localStorage.setItem("safestrata_cloud_key", ragApiKeyInput.value.trim());
+      });
+    }
+  }
 
   async function parseResponse(res) {
     const data = await res.json().catch(() => ({}));
@@ -66,7 +90,7 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
     if (!query) return alert("Please enter a query.");
 
     btnRunRag.disabled = true;
-    btnRunRag.textContent = "Processing RAG Pipeline...";
+    btnRunRag.textContent = "Processing AI Engine...";
     ragGuardrailBanner.style.display = "none";
 
     try {
@@ -77,7 +101,9 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
         use_reranker: document.getElementById("rag-toggle-reranker").checked,
         use_hyde: document.getElementById("rag-toggle-hyde").checked,
         use_knowledge_graph: document.getElementById("rag-toggle-kg").checked,
-        guardrails_enabled: document.getElementById("rag-toggle-guardrails").checked
+        guardrails_enabled: document.getElementById("rag-toggle-guardrails").checked,
+        llm_provider: ragLlmProviderSelect ? ragLlmProviderSelect.value : "local",
+        api_key: ragApiKeyInput ? ragApiKeyInput.value.trim() : null
       };
 
       const res = await fetch("/api/v1/rag/query", {
@@ -98,6 +124,17 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
       metricLatency.textContent = latencyMs + " ms";
       ragLatencyBadge.textContent = `${latencyMs} ms (${citations.length} Sources)`;
 
+      // Mode Badge
+      if (ragModeBadge) {
+        if (data.generation_mode === "grounded") {
+          ragModeBadge.textContent = "Grounded in RAG Documents";
+          ragModeBadge.className = "badge badge-green";
+        } else {
+          ragModeBadge.textContent = "AI General Intelligence (Dynamic)";
+          ragModeBadge.className = "badge badge-purple";
+        }
+      }
+
       // Guardrail warnings
       if (data.guardrail_report && data.guardrail_report.injection_detected) {
         ragGuardrailBanner.textContent = `⚠️ Security Alert: Prompt injection pattern detected! (Threat Score: ${data.guardrail_report.injection_score})`;
@@ -111,7 +148,11 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
       // Render Citations
       ragCitationsList.innerHTML = "";
       if (citations.length === 0) {
-        ragCitationsList.innerHTML = "<div class='citation-card'>No citations retrieved.</div>";
+        ragCitationsList.innerHTML = `
+          <div class='citation-card'>
+            <em>No matching documents found in knowledge base above relevance threshold (15%). Generated dynamically using AI general intelligence.</em>
+          </div>
+        `;
       } else {
         citations.forEach(c => {
           const card = document.createElement("div");
@@ -150,6 +191,7 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
   const searchModeSelect = document.getElementById("search-mode-select");
   const searchResultsList = document.getElementById("search-results-list");
   const searchCountBadge = document.getElementById("search-count-badge");
+  const searchNoticeBanner = document.getElementById("search-notice-banner");
 
   btnRunSearch.addEventListener("click", async () => {
     const q = searchQueryInput.value.trim();
@@ -157,6 +199,7 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
 
     btnRunSearch.disabled = true;
     btnRunSearch.textContent = "Searching...";
+    if (searchNoticeBanner) searchNoticeBanner.style.display = "none";
 
     try {
       const payload = {
@@ -179,6 +222,20 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
       searchCountBadge.textContent = `${results.length} Candidates (${latencyMs} ms)`;
       searchResultsList.innerHTML = "";
 
+      // Check if all candidates are out of domain (< 15% relevance)
+      const allLow = results.length > 0 && results.every(r => (r.final_score || 0) < 0.15);
+      if (searchNoticeBanner) {
+        if (allLow) {
+          searchNoticeBanner.style.display = "block";
+          searchNoticeBanner.innerHTML = `
+            <strong>ℹ️ Low Relevance / Out-of-Domain Notice:</strong> None of the indexed documents in ChromaDB have strong relevance to <em>"${q}"</em> (all candidates scored < 15%). 
+            The passages below are the nearest mathematical vectors. To ground queries on this topic, ingest documents covering it in the <strong>Multi-Level Chunking</strong> tab!
+          `;
+        } else {
+          searchNoticeBanner.style.display = "none";
+        }
+      }
+
       if (results.length === 0) {
         searchResultsList.innerHTML = "<div class='search-card'>No matching chunks found in active vector index. Please ingest a document first.</div>";
       } else {
@@ -189,10 +246,16 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
           const sparseScore = r.sparse_score != null ? (r.sparse_score * 100).toFixed(1) + "%" : "N/A";
           const rerankScore = r.rerank_score != null ? (r.rerank_score * 100).toFixed(1) + "%" : "N/A";
           
+          const isLow = (r.final_score || 0) < 0.15;
+          const chipClass = isLow ? "score-chip warning" : "score-chip";
+          const scoreLabel = isLow 
+            ? `${((r.final_score || 0) * 100).toFixed(1)}% (Low / Out of Domain)`
+            : `${((r.final_score || 0) * 100).toFixed(1)}%`;
+
           card.innerHTML = `
             <div class="card-meta-row">
               <span>Rank #${idx + 1} • Doc: ${(r.document_id || "").substring(0, 8)}...</span>
-              <span class="score-chip">Final: ${((r.final_score || 0) * 100).toFixed(1)}%</span>
+              <span class="${chipClass}">Final: ${scoreLabel}</span>
             </div>
             <p>${r.content || ""}</p>
             <div class="card-meta-row" style="margin-top: 8px;">

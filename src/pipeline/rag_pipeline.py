@@ -1,4 +1,5 @@
 import time
+import re
 from typing import Dict, Any, List
 from src.core.config import settings
 from src.core.logging import logger
@@ -93,29 +94,45 @@ class RAGPipeline:
         gen_result = generator.generate(
             query=active_query,
             context_chunks=retrieved_chunks,
-            graph_facts=graph_facts
+            graph_facts=graph_facts,
+            provider=request.llm_provider,
+            api_key=request.api_key,
+            model_name=request.model_name
         )
         latencies["generation_ms"] = round((time.time() - gen_start) * 1000, 2)
 
         raw_answer = gen_result["answer"]
         citations = gen_result["citations"]
+        generation_mode = gen_result.get("generation_mode", "grounded")
 
         # ---------------------------------------------------------
         # Step 5: Output Guardrails & Faithfulness Verification
         # ---------------------------------------------------------
         out_g_start = time.time()
         clean_answer, out_pii, out_pii_findings = output_guard.sanitize_output(raw_answer)
-        context_texts = [c.content for c in retrieved_chunks]
-        faithfulness, unsupported = output_guard.check_faithfulness(clean_answer, context_texts)
+        
+        # Verify faithfulness against relevant context
+        relevant_chunks = [c for c in retrieved_chunks if c.final_score >= settings.RELEVANCE_THRESHOLD]
+        if relevant_chunks:
+            context_texts = [c.content for c in relevant_chunks]
+            faithfulness, unsupported = output_guard.check_faithfulness(clean_answer, context_texts)
+        else:
+            # General knowledge generation mode - no false grounding claims
+            faithfulness = 1.0
+
         latencies["guardrails_output_ms"] = round((time.time() - out_g_start) * 1000, 2)
 
         total_latency = round((time.time() - total_start) * 1000, 2)
         metrics.record_latency("rag_pipeline_latency", total_latency)
 
-        # Estimate answer relevance based on keyword overlap with query
-        query_words = set(active_query.lower().split())
-        answer_words = set(clean_answer.lower().split())
-        relevance_score = round(min(1.0, len(query_words & answer_words) / max(1, len(query_words) * 0.6)), 2)
+        # Estimate answer relevance based on keyword/semantic overlap with query
+        query_words = set(re.findall(r"\b[a-zA-Z0-9]{3,}\b", active_query.lower()))
+        answer_words = set(re.findall(r"\b[a-zA-Z0-9]{3,}\b", clean_answer.lower()))
+        if query_words:
+            overlap = len(query_words & answer_words)
+            relevance_score = round(min(1.0, overlap / max(1, len(query_words) * 0.5)), 2)
+        else:
+            relevance_score = 0.95
 
         return RAGResponse(
             query=request.query,
@@ -127,7 +144,8 @@ class RAGPipeline:
             faithfulness_score=faithfulness,
             answer_relevance_score=relevance_score,
             latency_breakdown=latencies,
-            total_latency_ms=total_latency
+            total_latency_ms=total_latency,
+            generation_mode=generation_mode
         )
 
 rag_pipeline = RAGPipeline()

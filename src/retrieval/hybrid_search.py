@@ -93,10 +93,12 @@ class HybridSearchEngine:
 
         # Build fused list
         fused: List[ScoredChunk] = []
+        max_possible_rrf = 2.0 / (self.rrf_k + 1)
         for chunk_id, score in rrf_scores.items():
             chunk = chunk_map[chunk_id]
             chunk.rrf_score = score
-            chunk.final_score = score
+            norm_score = round(min(1.0, score / max_possible_rrf), 4)
+            chunk.final_score = norm_score
             fused.append(chunk)
 
         fused.sort(key=lambda c: c.final_score, reverse=True)

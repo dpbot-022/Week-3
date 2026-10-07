@@ -39,10 +39,14 @@ class Settings(BaseSettings):
     CANARY_TOKEN_PREFIX: str = "SEC_CTX"
     
     # Generation & LLM settings
-    LLM_PROVIDER: str = "local"  # "local", "openai", "ollama"
+    LLM_PROVIDER: str = "local"  # "local", "gemini", "openai", "anthropic"
     OPENAI_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    LOCAL_LLM_MODEL: str = "Qwen/Qwen2.5-0.5B-Instruct"
     LLM_MODEL_NAME: str = "gpt-4o-mini"
     LLM_TEMPERATURE: float = 0.2
+    RELEVANCE_THRESHOLD: float = 0.15  # Minimum score for passage grounding
     
     # Knowledge Graph settings
     GRAPH_STORAGE_PATH: str = str(BASE_DIR / "data" / "knowledge_graph.json")

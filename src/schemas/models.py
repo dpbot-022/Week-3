@@ -118,6 +118,9 @@ class RAGRequest(BaseModel):
     use_hyde: bool = False
     use_knowledge_graph: bool = True
     guardrails_enabled: bool = True
+    llm_provider: Optional[str] = None  # "local", "gemini", "openai", "anthropic"
+    api_key: Optional[str] = None
+    model_name: Optional[str] = None
 
 class Citation(BaseModel):
     chunk_id: str
@@ -137,6 +140,7 @@ class RAGResponse(BaseModel):
     answer_relevance_score: float
     latency_breakdown: Dict[str, float]
     total_latency_ms: float
+    generation_mode: Optional[str] = "grounded"  # "grounded" or "general_knowledge"
 
 class EvaluationItem(BaseModel):
     query: str

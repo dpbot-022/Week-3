@@ -51,8 +51,8 @@ class RAGEvaluator:
         )
         context_texts = [c.content for c in retrieved]
 
-        # Generation
-        gen_res = generator.generate(query=query, context_chunks=retrieved)
+        # Generation (fast synthesis for retrieval benchmarking)
+        gen_res = generator.generate(query=query, context_chunks=retrieved, provider="synthesis")
         answer = gen_res["answer"]
 
         # Faithfulness
