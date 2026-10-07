@@ -13,15 +13,19 @@ class ChromaVectorStore:
         self.persist_dir = persist_dir
         os.makedirs(self.persist_dir, exist_ok=True)
         self.client = chromadb.PersistentClient(path=self.persist_dir)
-        self._collections: Dict[str, Any] = {}
 
     def get_or_create_collection(self, collection_name: str = settings.DEFAULT_COLLECTION_NAME):
-        if collection_name not in self._collections:
-            self._collections[collection_name] = self.client.get_or_create_collection(
+        try:
+            return self.client.get_or_create_collection(
                 name=collection_name,
                 metadata={"hnsw:space": "cosine"}
             )
-        return self._collections[collection_name]
+        except Exception:
+            self.client = chromadb.PersistentClient(path=self.persist_dir)
+            return self.client.get_or_create_collection(
+                name=collection_name,
+                metadata={"hnsw:space": "cosine"}
+            )
 
     def add_chunks(
         self,
@@ -129,10 +133,9 @@ class ChromaVectorStore:
     def reset_collection(self, collection_name: str = settings.DEFAULT_COLLECTION_NAME):
         try:
             self.client.delete_collection(name=collection_name)
-            if collection_name in self._collections:
-                del self._collections[collection_name]
-            logger.info(f"Reset Chroma collection '{collection_name}'")
+            logger.info(f"Deleted Chroma collection '{collection_name}'")
         except Exception as e:
             logger.warning(f"Collection reset warning: {e}")
+        self.get_or_create_collection(collection_name)
 
 vector_store = ChromaVectorStore()

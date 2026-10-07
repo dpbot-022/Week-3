@@ -52,6 +52,15 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
   const metricLatency = document.getElementById("metric-latency");
   const ragLatencyBadge = document.getElementById("rag-latency-badge");
 
+  async function parseResponse(res) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data.message || data.detail || data.error || `HTTP ${res.status} Error`;
+      throw new Error(msg);
+    }
+    return data;
+  }
+
   btnRunRag.addEventListener("click", async () => {
     const query = ragQueryInput.value.trim();
     if (!query) return alert("Please enter a query.");
@@ -76,37 +85,44 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
+      const data = await parseResponse(res);
 
-      ragAnswerContent.textContent = data.answer;
-      metricFaithfulness.textContent = (data.faithfulness_score * 100).toFixed(0) + "%";
-      metricRelevance.textContent = (data.answer_relevance_score * 100).toFixed(0) + "%";
-      metricLatency.textContent = data.total_latency_ms + " ms";
-      ragLatencyBadge.textContent = `${data.total_latency_ms} ms (${data.citations.length} Sources)`;
+      const citations = data.citations || [];
+      const latencyMs = data.total_latency_ms != null ? data.total_latency_ms : 0;
+      const faithfulness = data.faithfulness_score != null ? (data.faithfulness_score * 100).toFixed(0) : 0;
+      const relevance = data.answer_relevance_score != null ? (data.answer_relevance_score * 100).toFixed(0) : 0;
+
+      ragAnswerContent.textContent = data.answer || "No response generated.";
+      metricFaithfulness.textContent = faithfulness + "%";
+      metricRelevance.textContent = relevance + "%";
+      metricLatency.textContent = latencyMs + " ms";
+      ragLatencyBadge.textContent = `${latencyMs} ms (${citations.length} Sources)`;
 
       // Guardrail warnings
-      if (data.guardrail_report.injection_detected) {
+      if (data.guardrail_report && data.guardrail_report.injection_detected) {
         ragGuardrailBanner.textContent = `⚠️ Security Alert: Prompt injection pattern detected! (Threat Score: ${data.guardrail_report.injection_score})`;
         ragGuardrailBanner.style.display = "block";
-      } else if (data.guardrail_report.pii_detected) {
-        ragGuardrailBanner.textContent = `ℹ️ Guardrail Notice: ${data.guardrail_report.pii_entities.length} PII entities redacted from query.`;
+      } else if (data.guardrail_report && data.guardrail_report.pii_detected) {
+        const piiCount = (data.guardrail_report.pii_entities || []).length;
+        ragGuardrailBanner.textContent = `ℹ️ Guardrail Notice: ${piiCount} PII entities redacted from query.`;
         ragGuardrailBanner.style.display = "block";
       }
 
       // Render Citations
       ragCitationsList.innerHTML = "";
-      if (data.citations.length === 0) {
+      if (citations.length === 0) {
         ragCitationsList.innerHTML = "<div class='citation-card'>No citations retrieved.</div>";
       } else {
-        data.citations.forEach(c => {
+        citations.forEach(c => {
           const card = document.createElement("div");
           card.className = "citation-card";
+          const scoreDisplay = c.score != null ? (c.score * 100).toFixed(1) + "%" : "N/A";
           card.innerHTML = `
             <div class="card-meta-row">
-              <span>Source Rank #${c.rank} • ID: ${c.chunk_id.substring(0, 8)}...</span>
-              <span class="score-chip">Relevance: ${(c.score * 100).toFixed(1)}%</span>
+              <span>Source Rank #${c.rank || 1} • ID: ${(c.chunk_id || "").substring(0, 8)}...</span>
+              <span class="score-chip">Relevance: ${scoreDisplay}</span>
             </div>
-            <p>${c.snippet}</p>
+            <p>${c.snippet || ""}</p>
           `;
           ragCitationsList.appendChild(card);
         });
@@ -156,15 +172,17 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
+      const data = await parseResponse(res);
+      const results = data.results || [];
+      const latencyMs = data.latency_ms != null ? data.latency_ms : 0;
 
-      searchCountBadge.textContent = `${data.results.length} Candidates (${data.latency_ms} ms)`;
+      searchCountBadge.textContent = `${results.length} Candidates (${latencyMs} ms)`;
       searchResultsList.innerHTML = "";
 
-      if (data.results.length === 0) {
+      if (results.length === 0) {
         searchResultsList.innerHTML = "<div class='search-card'>No matching chunks found in active vector index. Please ingest a document first.</div>";
       } else {
-        data.results.forEach((r, idx) => {
+        results.forEach((r, idx) => {
           const card = document.createElement("div");
           card.className = "search-card";
           const denseScore = r.dense_score != null ? (r.dense_score * 100).toFixed(1) + "%" : "N/A";
@@ -173,10 +191,10 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
           
           card.innerHTML = `
             <div class="card-meta-row">
-              <span>Rank #${idx + 1} • Doc: ${r.document_id.substring(0, 8)}...</span>
-              <span class="score-chip">Final: ${(r.final_score * 100).toFixed(1)}%</span>
+              <span>Rank #${idx + 1} • Doc: ${(r.document_id || "").substring(0, 8)}...</span>
+              <span class="score-chip">Final: ${((r.final_score || 0) * 100).toFixed(1)}%</span>
             </div>
-            <p>${r.content}</p>
+            <p>${r.content || ""}</p>
             <div class="card-meta-row" style="margin-top: 8px;">
               <span>Dense: ${denseScore} | Sparse: ${sparseScore} | Rerank: ${rerankScore}</span>
             </div>
@@ -223,8 +241,8 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
           chunk_overlap: 40
         })
       });
-      const data = await res.json();
-      renderChunks(data.chunks, data.strategy, data.latency_ms);
+      const data = await parseResponse(res);
+      renderChunks(data.chunks || [], data.strategy, data.latency_ms);
     } catch (err) {
       alert("Error previewing chunks: " + err.message);
     }
@@ -250,9 +268,9 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
           chunk_overlap: 40
         })
       });
-      const data = await res.json();
-      renderChunks(data.chunks, data.strategy, data.latency_ms);
-      alert(`Success! Ingested ${data.chunk_count} chunks into ChromaDB & BM25 (${data.latency_ms} ms). Knowledge graph extracted ${data.entities_extracted} entities.`);
+      const data = await parseResponse(res);
+      renderChunks(data.chunks || [], data.strategy, data.latency_ms);
+      alert(`Success! Ingested ${data.chunk_count || 0} chunks into ChromaDB & BM25 (${data.latency_ms || 0} ms). Knowledge graph extracted ${data.entities_extracted || 0} entities.`);
     } catch (err) {
       alert("Ingestion error: " + err.message);
     } finally {
@@ -262,9 +280,14 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
   });
 
   function renderChunks(chunks, strategy, latencyMs) {
-    chunkStatsBadge.textContent = `${chunks.length} Chunks (${strategy}) • ${latencyMs} ms`;
+    const safeChunks = chunks || [];
+    chunkStatsBadge.textContent = `${safeChunks.length} Chunks (${strategy || 'standard'}) • ${latencyMs || 0} ms`;
     chunksVisualizer.innerHTML = "";
-    chunks.forEach((c, idx) => {
+    if (safeChunks.length === 0) {
+      chunksVisualizer.innerHTML = "<div class='chunk-card'>No chunks generated.</div>";
+      return;
+    }
+    safeChunks.forEach((c, idx) => {
       const card = document.createElement("div");
       card.className = "chunk-card";
       card.innerHTML = `
@@ -359,20 +382,22 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
   async function loadKnowledgeGraph() {
     try {
       const res = await fetch("/api/v1/graph");
-      const data = await res.json();
-      graphNodeCount.textContent = data.total_nodes;
-      graphEdgeCount.textContent = data.total_edges;
+      const data = await parseResponse(res);
+      const nodes = data.nodes || [];
+      const edges = data.edges || [];
+      graphNodeCount.textContent = data.total_nodes != null ? data.total_nodes : nodes.length;
+      graphEdgeCount.textContent = data.total_edges != null ? data.total_edges : edges.length;
 
       graphEntitiesDisplay.innerHTML = "";
-      if (data.nodes.length === 0) {
+      if (nodes.length === 0) {
         graphEntitiesDisplay.innerHTML = "<div class='entity-pill'>No entities currently indexed. Ingest a document to extract entities and build relationships.</div>";
         return;
       }
 
-      data.nodes.forEach(n => {
+      nodes.forEach(n => {
         const pill = document.createElement("div");
         pill.className = "entity-pill";
-        const relEdges = data.edges.filter(e => e.source === n.id || e.target === n.id);
+        const relEdges = edges.filter(e => e.source === n.id || e.target === n.id);
         const relSummary = relEdges.map(e => `${e.source === n.id ? '→ ' + e.relation + ' ' + e.target : '← ' + e.relation + ' ' + e.source}`).join(", ");
         pill.innerHTML = `
           <div style="font-weight: 600; color: var(--accent-cyan);">${n.name}</div>
@@ -401,28 +426,29 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
       const res = await fetch("/api/v1/evaluations/benchmark", {
         method: "POST"
       });
-      const data = await res.json();
+      const data = await parseResponse(res);
 
       benchmarkSummaryBox.style.display = "block";
       benchmarkSummaryBox.innerHTML = `
-        <strong>🏆 Best Performing Architecture:</strong> ${data.best_performing_mode.toUpperCase()}<br>
-        <span style="font-size: 0.85rem; color: var(--text-muted);">${data.analysis}</span>
+        <strong>🏆 Best Performing Architecture:</strong> ${(data.best_performing_mode || 'HYBRID').toUpperCase()}<br>
+        <span style="font-size: 0.85rem; color: var(--text-muted);">${data.analysis || ''}</span>
       `;
 
       benchmarkTableBody.innerHTML = "";
-      for (const [mode, metrics] of Object.entries(data.aggregate_metrics)) {
+      const aggMetrics = data.aggregate_metrics || {};
+      for (const [mode, metrics] of Object.entries(aggMetrics)) {
         const row = document.createElement("tr");
         const isBest = mode === data.best_performing_mode;
         row.innerHTML = `
           <td style="font-weight: ${isBest ? '700' : '500'}; color: ${isBest ? 'var(--accent-emerald)' : 'var(--text-main)'};">
             ${mode} ${isBest ? '⭐' : ''}
           </td>
-          <td>${(metrics.avg_context_precision * 100).toFixed(1)}%</td>
-          <td>${(metrics.avg_context_recall * 100).toFixed(1)}%</td>
-          <td>${(metrics.avg_faithfulness * 100).toFixed(1)}%</td>
-          <td>${(metrics.avg_answer_relevance * 100).toFixed(1)}%</td>
-          <td>${metrics.avg_latency_ms} ms</td>
-          <td style="font-weight: 700; color: var(--accent-cyan);">${(metrics.composite_quality_score * 100).toFixed(1)}%</td>
+          <td>${((metrics.avg_context_precision || 0) * 100).toFixed(1)}%</td>
+          <td>${((metrics.avg_context_recall || 0) * 100).toFixed(1)}%</td>
+          <td>${((metrics.avg_faithfulness || 0) * 100).toFixed(1)}%</td>
+          <td>${((metrics.avg_answer_relevance || 0) * 100).toFixed(1)}%</td>
+          <td>${metrics.avg_latency_ms || 0} ms</td>
+          <td style="font-weight: 700; color: var(--accent-cyan);">${((metrics.composite_quality_score || 0) * 100).toFixed(1)}%</td>
         `;
         benchmarkTableBody.appendChild(row);
       }
