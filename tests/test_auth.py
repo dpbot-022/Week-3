@@ -57,11 +57,15 @@ def smtp_server():
     orig_port = settings.SMTP_PORT
     orig_starttls = settings.SMTP_STARTTLS
     orig_ssl = settings.SMTP_SSL
+    orig_user = settings.SMTP_USERNAME
+    orig_pass = settings.SMTP_PASSWORD
 
     settings.SMTP_HOST = "127.0.0.1"
     settings.SMTP_PORT = free_port
     settings.SMTP_STARTTLS = False
     settings.SMTP_SSL = False
+    settings.SMTP_USERNAME = None
+    settings.SMTP_PASSWORD = None
 
     yield handler
 
@@ -70,6 +74,8 @@ def smtp_server():
     settings.SMTP_PORT = orig_port
     settings.SMTP_STARTTLS = orig_starttls
     settings.SMTP_SSL = orig_ssl
+    settings.SMTP_USERNAME = orig_user
+    settings.SMTP_PASSWORD = orig_pass
 
 def test_smtp_email_sent_with_code_and_redaction(smtp_server, caplog):
     """Asserts that OTP email is genuinely delivered via SMTP, contains the 6-digit code,
