@@ -105,7 +105,7 @@ pytest
 *Measured on $N=40$ gold test questions (SHA-256 `bb0bb8b69cc4`). p50 Latency: 4.04 ms, p95 Latency: 5.51 ms (warm-up excluded). Git SHA: `f82526d`. Evaluation run: `2026-10-12T03:59:20.234896+00:00`.*
 <!-- EVAL_TABLE_END -->
 
-*(Full methodology, ablations, and system boundaries detailed in [docs/EVALUATION_REPORT.md](docs/EVALUATION_REPORT.md) and [LIMITATIONS.md](LIMITATIONS.md).)*
+*(Full methodology, ablations, and system boundaries detailed in [docs/EVALUATION_REPORT.md](docs/EVALUATION_REPORT.md).)*
 
 ---
 
