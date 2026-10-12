@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SafeStrata - Demo Data Seeding Script
-Reads the production knowledge corpus and populates ChromaDB, BM25, and NetworkX Knowledge Graph.
+Reads the production knowledge corpus and populates ChromaDB and BM25 with exact character span provenance.
 """
 
 import sys
@@ -18,7 +18,6 @@ from src.schemas.models import ChunkingStrategy
 from src.embeddings.provider import embedding_provider
 from src.vectorstore.chroma_store import vector_store
 from src.retrieval.bm25_search import bm25_engine
-from src.knowledge_graph.graph_store import knowledge_graph
 
 def seed_database():
     sample_path = BASE_DIR / "data" / "sample" / "production_knowledge.md"
@@ -37,6 +36,9 @@ def seed_database():
 
     print(f"📄 Loaded sample document: {sample_path.name} ({len(content)} characters)")
     
+    # Reset existing data
+    vector_store.reset_collection()
+
     # 1. Parsing & Chunking
     cleaned_content, _ = DocumentParser.parse_text(content, title)
     chunker = get_chunker(
@@ -46,6 +48,21 @@ def seed_database():
         embedding_provider=embedding_provider
     )
     chunks = chunker.chunk(cleaned_content, doc_id)
+
+    # Compute exact character offsets
+    for chunk in chunks:
+        snippet = chunk.content[:min(60, len(chunk.content))]
+        pos = cleaned_content.find(snippet)
+        if pos != -1:
+            chunk.char_start = pos
+            chunk.char_end = pos + len(chunk.content)
+        else:
+            chunk.char_start = 0
+            chunk.char_end = len(chunk.content)
+        chunk.metadata["char_start"] = chunk.char_start
+        chunk.metadata["char_end"] = chunk.char_end
+        chunk.metadata["document_id"] = doc_id
+
     print(f"🧩 Produced {len(chunks)} structured chunks using {ChunkingStrategy.DOCUMENT_SPECIFIC.value}")
 
     # 2. Dense Embeddings
@@ -63,21 +80,12 @@ def seed_database():
     all_chunks = vector_store.get_all_chunks()
     bm25_engine.index_documents(all_chunks)
 
-    # 5. Knowledge Graph Enrichment
-    print("🕸️ Extracting entities and relations into NetworkX Knowledge Graph...")
-    for chunk in chunks:
-        knowledge_graph.add_entities_and_relations(chunk.content, doc_id)
-
-    num_nodes = knowledge_graph.graph.number_of_nodes()
-    num_edges = knowledge_graph.graph.number_of_edges()
     total_elapsed = round((time.time() - start_time), 2)
 
     print("\n" + "=" * 65)
     print("✅ SafeStrata Corpus Seeding Complete!")
     print(f"   • Total Chunks Indexed:     {len(all_chunks)}")
     print(f"   • BM25 Documents Indexed:   {len(bm25_engine.corpus_docs)}")
-    print(f"   • Knowledge Graph Nodes:    {num_nodes}")
-    print(f"   • Knowledge Graph Edges:    {num_edges}")
     print(f"   • Elapsed Time:             {total_elapsed}s")
     print("=" * 65)
 

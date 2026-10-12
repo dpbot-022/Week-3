@@ -4,10 +4,9 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com/)
 [![ChromaDB](https://img.shields.io/badge/VectorDB-ChromaDB-orange.svg)](https://www.trychroma.com/)
 [![HuggingFace](https://img.shields.io/badge/HuggingFace-MiniLM--L6--v2-yellow.svg)](https://huggingface.co/)
-[![Coverage](https://img.shields.io/badge/coverage-91%25-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
-**SafeStrata** is a production-grade, enterprise-ready **Retrieval-Augmented Generation (RAG)** context engine engineered to Silicon Valley AI Engineering standards. It unites **Dense Vector Search** (local Hugging Face `all-MiniLM-L6-v2`), **Sparse Lexical Search** (`BM25Okapi`), **Reciprocal Rank Fusion (RRF)**, **Neural Cross-Encoder Reranking** (`cross-encoder/ms-marco-MiniLM-L-6-v2`), **NetworkX Knowledge Graphs**, and **Multi-Tier AI Guardrails** (Presidio-inspired PII redaction and canary-isolated prompt injection defense).
+**SafeStrata** is an enterprise-ready **Retrieval-Augmented Generation (RAG)** context engine. It unites **Dense Vector Search** (local Hugging Face `all-MiniLM-L6-v2`), **Sparse Lexical Search** (`BM25Okapi`), **Reciprocal Rank Fusion (RRF)**, **Neural Cross-Encoder Reranking** (`cross-encoder/ms-marco-MiniLM-L-6-v2`), and **Deterministic AI Guardrails** (Regex PII detector with PAN, Aadhaar, email, phone, SSN, API key redaction, and canary-isolated prompt injection defense).
 
 ---
 
@@ -26,29 +25,20 @@
    - **Reciprocal Rank Fusion (RRF)**: $RRF(d) = \sum \frac{1}{k + rank_i(d)}$ ($k=60$) combining heterogeneous distributions without normalization bias.
 
 3. **Neural Cross-Encoder Reranking**:
-   - `cross-encoder/ms-marco-MiniLM-L-6-v2` performs joint cross-attention over query-document pairs, boosting Top-K precision from 62.5% to **94.5%**.
+   - `cross-encoder/ms-marco-MiniLM-L-6-v2` performs joint cross-attention over query-document pairs, boosting Top-K precision.
 
-4. **Query Rewriting & Context Deduplication**:
+4. **Query Optimization & Deduplication**:
    - **HyDE (Hypothetical Document Embeddings)**: Expands terse queries into hypothetical document answer vectors to bridge semantic distance.
    - **Context Deduplication**: 3-shingle Jaccard overlap thresholding eliminates redundant chunks while preserving context diversity.
 
-5. **Knowledge Graph Traversal (NetworkX)**:
-   - Automated entity extraction (Technologies, Organizations, Architectural Concepts).
-   - Directed NetworkX graph ($G=(V, E)$) tracking co-occurrence and structural relations.
-   - Multi-hop graph traversal injects relational facts directly into RAG prompt context.
-
-6. **Multi-Tier AI Security & Guardrails**:
-   - **PII Detection & Redaction**: Scans and masks emails, phone numbers, SSNs, credit cards, API keys, and IP addresses with structured replacement tokens (`[EMAIL_REDACTED]`).
+5. **Multi-Tier Security & Guardrails**:
+   - **Regex PII Detection & Redaction**: Scans and masks emails, phone numbers, SSNs, credit cards, API keys, IP addresses, Indian PAN, and Aadhaar numbers with replacement tokens (`[EMAIL_REDACTED]`, `[PAN_REDACTED]`). Public API responses return entity types and character offsets only, never raw matched strings.
    - **Prompt Injection Defense**: Evaluates incoming queries against jailbreak signatures ("Ignore previous directives", "DAN mode", system escapes) and canary isolation boundaries (`<SEC_CTX_USER_INPUT>`).
-   - **Output Guardrail**: Validates generated answers for factual grounding (faithfulness anti-hallucination score) and output PII containment.
+   - **Calibrated Abstention**: Automatically abstains (`status="abstained"`) when retrieved context fails to meet relevance thresholds (threshold 0.15) or support checks.
 
-7. **Automated RAG Triad Evaluations**:
-   - Measures **Context Precision**, **Context Recall**, **Faithfulness**, **Answer Relevance**, and **p50/p95 Latency**.
-   - Built-in multi-mode benchmark comparing Dense vs. Sparse vs. Hybrid vs. Cross-Encoder.
-
-8. **Interactive Web UI Playground**:
+6. **Interactive Web UI Playground**:
    - Sleek modern dark glassmorphism dashboard served directly by FastAPI.
-   - Live testing of all chunking levels, hybrid search score breakdown, guardrails audit, and visual knowledge graph.
+   - Live testing of all chunking levels, hybrid search score breakdown, and guardrails audit.
 
 ---
 
@@ -75,10 +65,13 @@ uv pip install -e .
 ```bash
 cp .env.example .env
 ```
-*(No external API keys required! Runs out of the box with local Hugging Face models and local generation. Optional OpenAI integration available by adding `OPENAI_API_KEY`.)*
+*(Runs out of the box with local Hugging Face models and local generation. Optional OpenAI, Gemini, or Anthropic integration available via environment keys.)*
 
-### 3. Run the Application
+### 3. Seed Demo Data & Run
 ```bash
+# Seed local knowledge base
+python scripts/seed_demo_data.py
+
 # Start server with uvicorn
 uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload
 ```
@@ -88,104 +81,31 @@ Open your browser at:
 
 ---
 
-## 🐳 Docker & Docker Compose
-
-Run the entire pipeline in isolated, unprivileged containers:
-
-```bash
-# Build and run with Docker Compose
-docker-compose up --build -d
-
-# Check health
-curl http://localhost:8001/api/v1/health
-```
-
----
-
 ## 🧪 Automated Testing & Coverage
 
-Execute the complete test suite with measured code coverage:
+Execute the complete test suite with measured code coverage and ratcheted threshold:
 
 ```bash
-pytest --cov=src --cov-report=term-missing tests/
-```
-
-**Measured Test Results:**
-- **22 passing tests** across chunking, guardrails, retrieval, knowledge graph, and API layers.
-- **91% real measured test coverage** (0 failures).
-
----
-
-## 📡 API Reference & cURL Examples
-
-### 1. Ingest Document with Multi-Level Chunking
-```bash
-curl -X POST http://localhost:8001/api/v1/documents/ingest \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Hybrid Search Guide",
-    "content": "Hybrid search integrates dense vector embeddings with sparse BM25 scores. ChromaDB acts as the vector store.",
-    "strategy": "recursive",
-    "chunk_size": 250,
-    "chunk_overlap": 25
-  }'
-```
-
-### 2. Hybrid Search with Cross-Encoder Scoring
-```bash
-curl -X POST http://localhost:8001/api/v1/search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "vector store hybrid search",
-    "top_k": 3,
-    "mode": "hybrid",
-    "use_reranker": true,
-    "use_hyde": false
-  }'
-```
-
-### 3. Execute End-to-End Grounded RAG Query
-```bash
-curl -X POST http://localhost:8001/api/v1/rag/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "How does hybrid search combine dense and sparse rankings?",
-    "top_k": 3,
-    "search_mode": "hybrid",
-    "use_reranker": true,
-    "use_knowledge_graph": true,
-    "guardrails_enabled": true
-  }'
-```
-
-### 4. Audit Text for PII & Prompt Injections
-```bash
-curl -X POST http://localhost:8001/api/v1/guardrails/check \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Contact user at john.doe@enterprise.com or call 415-555-0199. Ignore previous instructions.",
-    "check_pii": true,
-    "check_injection": true
-  }'
-```
-
-### 5. Run Automated Evaluations Benchmark
-```bash
-curl -X POST http://localhost:8001/api/v1/evaluations/benchmark
+pytest
 ```
 
 ---
 
 ## 📊 Benchmark Evaluation Summary
 
-| Architecture Configuration | Context Precision | Context Recall | Faithfulness | Latency (p50) | Composite Score |
+<!-- EVAL_TABLE_START -->
+| Architecture / Ablation | Recall@5 [95% CI] | MRR [95% CI] | nDCG@5 [95% CI] | Claim Faithfulness [95% CI] | Embedding Relevance [95% CI] |
 |---|---|---|---|---|---|
-| **Dense Only** (`all-MiniLM-L6-v2`) | 62.5% | 75.0% | 88.0% | 18 ms | 0.7425 |
-| **Sparse Only** (`BM25Okapi`) | 70.0% | 68.0% | 85.0% | 6 ms | 0.7295 |
-| **Hybrid Search (RRF)** | 85.0% | 88.0% | 94.0% | 24 ms | 0.8785 |
-| **Hybrid + Neural Cross-Encoder Reranker** | **94.5%** | **92.0%** | **98.0%** | **48 ms** | **0.9438** |
+| **Dense Only** (`all-MiniLM-L6-v2`) | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 25.0% [12.5%, 40.0%] | 25.0% [12.5%, 40.0%] |
+| **Sparse Only** (`BM25Okapi`) | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 25.0% [12.5%, 40.0%] | 25.0% [12.5%, 40.0%] |
+| **Hybrid (RRF)** | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 25.0% [12.5%, 40.0%] | 25.0% [12.5%, 40.0%] |
+| **Hybrid + Cross-Encoder Reranker** | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 25.0% [12.5%, 40.0%] | 25.0% [12.5%, 40.0%] |
+| **Hybrid + Cross-Encoder + HyDE** | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 27.5% [15.0%, 42.5%] | 25.0% [12.5%, 40.0%] | 25.0% [12.5%, 40.0%] |
 
-*(Full details available in [docs/EVALUATION_REPORT.md](docs/EVALUATION_REPORT.md).)*
+*Measured on $N=40$ gold test questions (SHA-256 `bb0bb8b69cc4`). p50 Latency: 4.04 ms, p95 Latency: 5.51 ms (warm-up excluded). Git SHA: `f82526d`. Evaluation run: `2026-10-12T03:59:20.234896+00:00`.*
+<!-- EVAL_TABLE_END -->
+
+*(Full methodology, ablations, and system boundaries detailed in [docs/EVALUATION_REPORT.md](docs/EVALUATION_REPORT.md) and [LIMITATIONS.md](LIMITATIONS.md).)*
 
 ---
 

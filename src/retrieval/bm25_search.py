@@ -56,13 +56,17 @@ class BM25SearchEngine:
             normalized_score = float(raw_scores[idx] / max_score)
             meta = self.corpus_metas[idx]
             doc_id = meta.get("document_id", "unknown")
+            c_start = int(meta.get("start_char", meta.get("char_start", 0)))
+            c_end = int(meta.get("end_char", meta.get("char_end", 0)))
             scored_chunks.append(ScoredChunk(
                 id=self.corpus_ids[idx],
                 document_id=doc_id,
                 content=self.corpus_docs[idx],
                 metadata=meta,
                 sparse_score=normalized_score,
-                final_score=normalized_score
+                final_score=normalized_score,
+                char_start=c_start,
+                char_end=c_end
             ))
 
         return scored_chunks

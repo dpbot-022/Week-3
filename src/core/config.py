@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     INJECTION_DETECTION_THRESHOLD: float = 0.65
     PII_REDACTION_ENABLED: bool = True
     CANARY_TOKEN_PREFIX: str = "SEC_CTX"
+    AUDIT_TOKEN: str = "safestrata-audit-secret-token"
     
     # Generation & LLM settings
     LLM_PROVIDER: str = "local"  # "local", "gemini", "openai", "anthropic"

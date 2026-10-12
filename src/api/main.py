@@ -67,7 +67,7 @@ async def add_process_time_and_request_id(request: Request, call_next):
             status_code=500,
             content={
                 "error": "Internal Server Error",
-                "message": str(exc),
+                "message": "An unexpected internal server error occurred.",
                 "request_id": request_id,
                 "latency_ms": process_time
             },

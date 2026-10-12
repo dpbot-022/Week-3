@@ -1,0 +1,175 @@
+{
+  "timestamp": "2026-10-12T03:55:32.077083+00:00",
+  "git_sha": "f82526d",
+  "dataset_hash": "bb0bb8b69cc4dc8b3099097a5be09a2ebf312816e616ba845360ee187b5fa78e",
+  "dataset_size": 80,
+  "test_size": 40,
+  "metrics": {
+    "recall_at_k": {
+      "mean": 0.275,
+      "ci_lower": 0.15,
+      "ci_upper": 0.425
+    },
+    "mrr": {
+      "mean": 0.275,
+      "ci_lower": 0.15,
+      "ci_upper": 0.425
+    },
+    "ndcg_at_k": {
+      "mean": 0.275,
+      "ci_lower": 0.15,
+      "ci_upper": 0.425
+    },
+    "claim_entailment_faithfulness": {
+      "mean": 0.25,
+      "ci_lower": 0.125,
+      "ci_upper": 0.4
+    },
+    "embedding_similarity_relevance": {
+      "mean": 0.25,
+      "ci_lower": 0.125,
+      "ci_upper": 0.4
+    }
+  },
+  "latency": {
+    "p50_ms": 4.03,
+    "p95_ms": 5.37
+  },
+  "ablations": {
+    "dense_only": {
+      "recall_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "mrr": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "ndcg_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "faithfulness": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      },
+      "relevance": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      }
+    },
+    "sparse_bm25_only": {
+      "recall_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "mrr": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "ndcg_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "faithfulness": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      },
+      "relevance": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      }
+    },
+    "hybrid_rrf": {
+      "recall_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "mrr": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "ndcg_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "faithfulness": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      },
+      "relevance": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      }
+    },
+    "hybrid_reranker": {
+      "recall_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "mrr": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "ndcg_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "faithfulness": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      },
+      "relevance": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      }
+    },
+    "hybrid_reranker_hyde": {
+      "recall_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "mrr": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "ndcg_at_k": {
+        "mean": 0.275,
+        "ci_lower": 0.15,
+        "ci_upper": 0.425
+      },
+      "faithfulness": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      },
+      "relevance": {
+        "mean": 0.25,
+        "ci_lower": 0.125,
+        "ci_upper": 0.4
+      }
+    }
+  }
+}

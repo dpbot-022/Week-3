@@ -1,93 +1,153 @@
+import os
+import json
+import time
+import subprocess
+import hashlib
 from datetime import datetime, timezone
-from typing import List, Dict, Any
-from src.schemas.models import BenchmarkReport, EvaluationItem, SearchMode
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+import numpy as np
+
+from src.core.config import BASE_DIR
+from src.schemas.models import BenchmarkReport, BootstrapCI, SearchMode
 from src.evaluation.rag_evaluator import evaluator
 
-# Standardized synthetic evaluation benchmark test queries
-DEFAULT_BENCHMARK_SUITE = [
-    {
-        "query": "How does hybrid search combine dense and sparse rankings?",
-        "keywords": ["hybrid", "dense", "sparse", "rrf", "reciprocal"]
-    },
-    {
-        "query": "What are the security protections against prompt injection and PII leaks?",
-        "keywords": ["security", "injection", "pii", "redact", "guardrail"]
-    },
-    {
-        "query": "How does cross-encoder neural reranking improve retrieval accuracy?",
-        "keywords": ["cross-encoder", "reranking", "relevance", "joint", "score"]
-    },
-    {
-        "query": "What role does a knowledge graph play in multi-hop query reasoning?",
-        "keywords": ["knowledge", "graph", "entity", "traversal", "relation"]
-    }
-]
+def compute_bootstrap_ci(values: List[float], n_bootstraps: int = 1000, ci: float = 0.95) -> BootstrapCI:
+    """Computes mean and 95% non-parametric bootstrap confidence interval."""
+    if not values:
+        return BootstrapCI(mean=0.0, ci_lower=0.0, ci_upper=0.0)
+    arr = np.array(values, dtype=np.float64)
+    mean_val = float(np.mean(arr))
+    if len(arr) == 1 or np.all(arr == arr[0]):
+        return BootstrapCI(mean=round(mean_val, 4), ci_lower=round(mean_val, 4), ci_upper=round(mean_val, 4))
+
+    rng = np.random.default_rng(seed=42)
+    boot_means = np.empty(n_bootstraps)
+    for i in range(n_bootstraps):
+        sample = rng.choice(arr, size=len(arr), replace=True)
+        boot_means[i] = np.mean(sample)
+
+    alpha = (1.0 - ci) / 2.0
+    lower = float(np.percentile(boot_means, alpha * 100))
+    upper = float(np.percentile(boot_means, (1.0 - alpha) * 100))
+    return BootstrapCI(
+        mean=round(mean_val, 4),
+        ci_lower=round(lower, 4),
+        ci_upper=round(upper, 4)
+    )
 
 class BenchmarkRunner:
-    """Runs automated benchmark matrix across retrieval modes and generates production evaluation reports."""
+    """Production evaluation runner executing gold evaluation sets with bootstrap CIs and ablations."""
 
-    def run_benchmark(self, test_suite: List[Dict[str, Any]] = DEFAULT_BENCHMARK_SUITE) -> BenchmarkReport:
-        modes_to_test = [
-            (SearchMode.DENSE, False),
-            (SearchMode.SPARSE, False),
-            (SearchMode.HYBRID, False),
-            (SearchMode.HYBRID, True),  # Hybrid + Neural Cross-Encoder Reranker
-        ]
+    def __init__(self, dataset_path: Optional[str] = None):
+        self.dataset_path = Path(dataset_path or (BASE_DIR / "data" / "gold_eval_set.json"))
 
-        evaluations: List[EvaluationItem] = []
-        aggregates: Dict[str, Dict[str, float]] = {}
+    def load_dataset(self) -> List[Dict[str, Any]]:
+        if not self.dataset_path.exists():
+            from scripts.generate_gold_dataset import generate_gold_set
+            generate_gold_set()
+        with open(self.dataset_path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
-        for mode, use_rerank in modes_to_test:
-            mode_label = f"{mode.value}{'+reranker' if use_rerank else ''}"
-            mode_evals = []
-            
-            for item in test_suite:
-                eval_item = evaluator.evaluate_single(
-                    query=item["query"],
-                    expected_keywords=item.get("keywords"),
-                    search_mode=mode,
-                    use_reranker=use_rerank
-                )
-                mode_evals.append(eval_item)
-                evaluations.append(eval_item)
-
-            # Compute aggregate averages
-            avg_precision = sum(e.context_precision for e in mode_evals) / len(mode_evals)
-            avg_recall = sum(e.context_recall for e in mode_evals) / len(mode_evals)
-            avg_faithfulness = sum(e.faithfulness for e in mode_evals) / len(mode_evals)
-            avg_relevance = sum(e.answer_relevance for e in mode_evals) / len(mode_evals)
-            avg_latency = sum(e.latency_ms for e in mode_evals) / len(mode_evals)
-
-            # Composite Quality Score
-            composite_score = round(
-                (0.35 * avg_precision) + (0.25 * avg_recall) + (0.25 * avg_faithfulness) + (0.15 * avg_relevance), 4
+    def get_git_sha(self) -> str:
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(BASE_DIR),
+                capture_output=True,
+                text=True,
+                check=True
             )
+            return res.stdout.strip()
+        except Exception:
+            return "HEAD"
 
-            aggregates[mode_label] = {
-                "avg_context_precision": round(avg_precision, 4),
-                "avg_context_recall": round(avg_recall, 4),
-                "avg_faithfulness": round(avg_faithfulness, 4),
-                "avg_answer_relevance": round(avg_relevance, 4),
-                "avg_latency_ms": round(avg_latency, 2),
-                "composite_quality_score": composite_score
+    def run_benchmark(self, split: str = "test") -> BenchmarkReport:
+        dataset = self.load_dataset()
+        dataset_bytes = self.dataset_path.read_bytes()
+        dataset_hash = hashlib.sha256(dataset_bytes).hexdigest()
+
+        test_items = [item for item in dataset if item.get("split") == split]
+        if not test_items:
+            test_items = dataset
+
+        # Warm-up phase (5 queries excluded from latency benchmarks)
+        for warm_item in test_items[:min(5, len(test_items))]:
+            evaluator.evaluate_single(warm_item, search_mode=SearchMode.HYBRID, use_reranker=True)
+
+        # Primary architecture: Hybrid + Neural Cross-Encoder Reranker
+        latencies: List[float] = []
+        recalls: List[float] = []
+        mrrs: List[float] = []
+        ndcgs: List[float] = []
+        faithfulnesses: List[float] = []
+        relevances: List[float] = []
+
+        for item in test_items:
+            res = evaluator.evaluate_single(item, search_mode=SearchMode.HYBRID, use_reranker=True, use_hyde=False)
+            recalls.append(res.recall_at_k)
+            mrrs.append(res.mrr)
+            ndcgs.append(res.ndcg_at_k)
+            faithfulnesses.append(res.faithfulness)
+            relevances.append(res.answer_relevance)
+            latencies.append(res.latency_ms)
+
+        latency_arr = np.array(latencies, dtype=np.float64)
+        latency_p50 = float(np.percentile(latency_arr, 50))
+        latency_p95 = float(np.percentile(latency_arr, 95))
+
+        metrics_summary = {
+            "recall_at_k": compute_bootstrap_ci(recalls),
+            "mrr": compute_bootstrap_ci(mrrs),
+            "ndcg_at_k": compute_bootstrap_ci(ndcgs),
+            "claim_entailment_faithfulness": compute_bootstrap_ci(faithfulnesses),
+            "embedding_similarity_relevance": compute_bootstrap_ci(relevances)
+        }
+
+        # Ablation experiments across configurations
+        ablation_configs = {
+            "dense_only": (SearchMode.DENSE, False, False),
+            "sparse_bm25_only": (SearchMode.SPARSE, False, False),
+            "hybrid_rrf": (SearchMode.HYBRID, False, False),
+            "hybrid_reranker": (SearchMode.HYBRID, True, False),
+            "hybrid_reranker_hyde": (SearchMode.HYBRID, True, True),
+        }
+
+        ablations_summary: Dict[str, Dict[str, BootstrapCI]] = {}
+        for ab_name, (mode, use_rr, use_hy) in ablation_configs.items():
+            ab_recalls = []
+            ab_mrrs = []
+            ab_ndcgs = []
+            ab_faiths = []
+            ab_relevs = []
+            for item in test_items:
+                res = evaluator.evaluate_single(item, search_mode=mode, use_reranker=use_rr, use_hyde=use_hy)
+                ab_recalls.append(res.recall_at_k)
+                ab_mrrs.append(res.mrr)
+                ab_ndcgs.append(res.ndcg_at_k)
+                ab_faiths.append(res.faithfulness)
+                ab_relevs.append(res.answer_relevance)
+
+            ablations_summary[ab_name] = {
+                "recall_at_k": compute_bootstrap_ci(ab_recalls),
+                "mrr": compute_bootstrap_ci(ab_mrrs),
+                "ndcg_at_k": compute_bootstrap_ci(ab_ndcgs),
+                "faithfulness": compute_bootstrap_ci(ab_faiths),
+                "relevance": compute_bootstrap_ci(ab_relevs)
             }
-
-        # Determine best performing mode
-        best_mode = max(aggregates.keys(), key=lambda k: aggregates[k]["composite_quality_score"])
-
-        analysis = (
-            f"Benchmark analysis across {len(test_suite)} synthetic query scenarios confirms that '{best_mode}' "
-            f"achieved the highest composite quality score ({aggregates[best_mode]['composite_quality_score']}). "
-            f"Hybrid search with Cross-Encoder reranking significantly mitigates dense vector false positives "
-            f"and sparse keyword omissions while maintaining sub-second inference latency."
-        )
 
         return BenchmarkReport(
             timestamp=datetime.now(timezone.utc).isoformat(),
-            evaluations=evaluations,
-            aggregate_metrics=aggregates,
-            best_performing_mode=best_mode,
-            analysis=analysis
+            git_sha=self.get_git_sha(),
+            dataset_hash=dataset_hash,
+            dataset_size=len(dataset),
+            test_size=len(test_items),
+            metrics=metrics_summary,
+            latency={
+                "p50_ms": round(latency_p50, 2),
+                "p95_ms": round(latency_p95, 2)
+            },
+            ablations=ablations_summary
         )
 
 benchmark_runner = BenchmarkRunner()

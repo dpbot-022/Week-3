@@ -23,6 +23,7 @@ def test_guardrails_check_endpoint():
     assert data["pii_detected"] is True
     assert "[EMAIL_REDACTED]" in data["sanitized_text"]
     assert data["injection_detected"] is True
+    assert "injection_patterns" not in data
 
 def test_preview_chunking_endpoint():
     payload = {
@@ -66,21 +67,24 @@ def test_ingest_and_rag_query():
         "top_k": 3,
         "search_mode": "hybrid",
         "use_reranker": False,
-        "use_knowledge_graph": True,
-        "guardrails_enabled": True
+        "guardrails_enabled": True,
+        "llm_provider": "synthesis"
     }
     rag_res = client.post("/api/v1/rag/query", json=rag_payload)
     assert rag_res.status_code == 200
     rag_data = rag_res.json()
     assert "answer" in rag_data
+    assert rag_data["status"] == "answered"
+    assert rag_data["is_grounded"] is True
     assert len(rag_data["citations"]) >= 1
 
 def test_benchmark_endpoint():
     res = client.post("/api/v1/evaluations/benchmark")
     assert res.status_code == 200
     data = res.json()
-    assert "aggregate_metrics" in data
-    assert "best_performing_mode" in data
+    assert "metrics" in data
+    assert "ablations" in data
+    assert "dataset_hash" in data
 
 def test_metrics_and_graph_endpoints():
     m_res = client.get("/api/v1/metrics")
@@ -108,4 +112,3 @@ def test_reset_endpoint():
     res = client.post("/api/v1/documents/reset")
     assert res.status_code == 200
     assert res.json()["status"] == "success"
-

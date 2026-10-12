@@ -17,7 +17,7 @@
         <div class="logo-badge">SafeStrata</div>
         <div>
           <h1>SafeStrata Context Engine</h1>
-          <p class="subtitle">Layered Hybrid Retrieval • Cross-Encoder Reranking • PII Guardrails • NetworkX Knowledge Graph</p>
+          <p class="subtitle">Layered Hybrid Retrieval • Cross-Encoder Reranking • PII & Prompt Guardrails • Verifiable Faithfulness</p>
         </div>
       </div>
       <div class="header-right">
@@ -35,7 +35,6 @@
       <button class="nav-tab" data-tab="tab-search" id="btn-tab-search">Hybrid Search Explorer</button>
       <button class="nav-tab" data-tab="tab-chunking" id="btn-tab-chunking">Multi-Level Chunking</button>
       <button class="nav-tab" data-tab="tab-guardrails" id="btn-tab-guardrails">Security & Guardrails</button>
-      <button class="nav-tab" data-tab="tab-graph" id="btn-tab-graph">Knowledge Graph</button>
       <button class="nav-tab" data-tab="tab-evals" id="btn-tab-evals">Automated Evaluations</button>
     </nav>
 
@@ -77,10 +76,6 @@
               <label class="toggle-label">
                 <input type="checkbox" id="rag-toggle-hyde">
                 <span>HyDE Query Rewriter</span>
-              </label>
-              <label class="toggle-label">
-                <input type="checkbox" id="rag-toggle-kg" checked>
-                <span>Knowledge Graph Augmentation</span>
               </label>
               <label class="toggle-label">
                 <input type="checkbox" id="rag-toggle-guardrails" checked>
@@ -272,31 +267,6 @@
         </div>
       </section>
 
-      <!-- 5. KNOWLEDGE GRAPH TAB -->
-      <section id="tab-graph" class="tab-panel">
-        <div class="control-card full-width">
-          <div class="card-header-row">
-            <div>
-              <h3>NetworkX Knowledge Graph</h3>
-              <p class="card-desc">Extracted entities and relational edges used for multi-hop RAG context enrichment.</p>
-            </div>
-            <button id="btn-refresh-graph" class="secondary-btn">Refresh Graph</button>
-          </div>
-          
-          <div class="graph-stats-row">
-            <div class="metric-box">
-              <span class="metric-label">Total Entities (Nodes)</span>
-              <span id="graph-node-count" class="metric-val">0</span>
-            </div>
-            <div class="metric-box">
-              <span class="metric-label">Total Relationships (Edges)</span>
-              <span id="graph-edge-count" class="metric-val">0</span>
-            </div>
-          </div>
-
-          <div class="graph-entities-grid" id="graph-entities-display"></div>
-        </div>
-      </section>
 
       <!-- 6. AUTOMATED EVALUATIONS TAB -->
       <section id="tab-evals" class="tab-panel">
@@ -316,18 +286,17 @@
               <thead>
                 <tr>
                   <th>Retrieval Architecture</th>
-                  <th>Context Precision</th>
-                  <th>Context Recall</th>
-                  <th>Faithfulness (Anti-Hallucination)</th>
-                  <th>Answer Relevance</th>
-                  <th>Latency (p50 ms)</th>
-                  <th>Composite Quality</th>
+                  <th>Recall@5 (95% CI)</th>
+                  <th>MRR (95% CI)</th>
+                  <th>nDCG@5 (95% CI)</th>
+                  <th>Faithfulness NLI (95% CI)</th>
+                  <th>Answer Relevance (95% CI)</th>
                 </tr>
               </thead>
               <tbody id="benchmark-table-body">
                 <tr>
-                  <td colspan="7" style="text-align: center; color: var(--text-muted);">
-                    Click "Run Automated Benchmark" to execute the evaluation suite across all modes.
+                  <td colspan="6" style="text-align: center; color: var(--text-muted);">
+                    Click "Run Automated Benchmark" to execute the rigorous evaluation suite across all ablation modes.
                   </td>
                 </tr>
               </tbody>
@@ -340,7 +309,7 @@
     <!-- Footer -->
     <footer class="app-footer">
       <span>SafeStrata Context Engine • Production AI Engineering System</span>
-      <span>Local MiniLM • ChromaDB • BM25Okapi • Cross-Encoder • NetworkX</span>
+      <span>Local MiniLM • ChromaDB • BM25Okapi • Cross-Encoder Reranker</span>
     </footer>
   </div>
 

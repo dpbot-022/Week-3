@@ -1,12 +1,13 @@
 import threading
 import httpx
 from typing import List, Dict, Any, Optional
+from fastapi import HTTPException, status
 from src.core.config import settings
 from src.core.logging import logger
 from src.schemas.models import ScoredChunk, Citation
 
 class GroundedGenerator:
-    """Production grounded generation service supporting local neural LLM, Gemini, OpenAI, Claude, and local synthesis."""
+    """Production grounded generation service supporting local neural LLM, Gemini, OpenAI, Claude, and extractive synthesis."""
 
     def __init__(self, provider: str = settings.LLM_PROVIDER, api_key: str = settings.OPENAI_API_KEY):
         self.default_provider = provider
@@ -31,7 +32,7 @@ class GroundedGenerator:
                         self._local_pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
                         logger.info("Local generative LLM loaded successfully.")
                     except Exception as e:
-                        logger.warning(f"Could not load local generative LLM ({e}). Will use fallback synthesis.")
+                        logger.warning(f"Could not load local generative LLM ({e}). Will use extractive synthesis.")
                         self._local_pipe = False
         return self._local_pipe if self._local_pipe is not False else None
 
@@ -39,12 +40,11 @@ class GroundedGenerator:
         self,
         query: str,
         context_chunks: List[ScoredChunk],
-        graph_facts: Optional[List[str]] = None,
         provider: Optional[str] = None,
         api_key: Optional[str] = None,
         model_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Generates grounded answer with source attribution or dynamic AI answer if out-of-domain."""
+        """Generates grounded answer with source attribution. Never falls back to ungrounded general knowledge."""
         active_provider = (provider or self.default_provider or "local").lower()
         active_key = api_key or self.default_api_key
         if not active_key:
@@ -57,72 +57,55 @@ class GroundedGenerator:
 
         # Check if retrieved chunks meet relevance threshold
         relevant_chunks = [c for c in context_chunks if c.final_score >= settings.RELEVANCE_THRESHOLD]
-        is_grounded = len(relevant_chunks) > 0
+        if not relevant_chunks:
+            return {
+                "answer": "Abstained: Insufficient grounded context retrieved to answer this query safely.",
+                "citations": [],
+                "is_grounded": False
+            }
 
-        # Build citations only for relevant passages
+        # Build citations for relevant passages
         citations: List[Citation] = []
-        if is_grounded:
-            for rank, c in enumerate(relevant_chunks, start=1):
-                snippet = c.content[:150] + "..." if len(c.content) > 150 else c.content
-                citations.append(Citation(
-                    chunk_id=c.id,
-                    document_id=c.document_id,
-                    snippet=snippet,
-                    score=round(c.final_score, 4),
-                    rank=rank
-                ))
+        for rank, c in enumerate(relevant_chunks, start=1):
+            snippet = c.content[:150] + "..." if len(c.content) > 150 else c.content
+            citations.append(Citation(
+                chunk_id=c.id,
+                document_id=c.document_id,
+                snippet=snippet,
+                score=round(c.final_score, 4),
+                rank=rank,
+                char_start=c.char_start,
+                char_end=c.char_end
+            ))
 
-        # Build Prompts
-        if is_grounded:
-            context_text = "\n\n".join([f"[{i+1}] {c.content}" for i, c in enumerate(relevant_chunks)])
-            graph_text = "\n".join([f"- {f}" for f in (graph_facts or [])])
+        # Build Grounded Prompt
+        context_text = "\n\n".join([f"[{i+1}] {c.content}" for i, c in enumerate(relevant_chunks)])
+        system_prompt = (
+            "You are SafeStrata AI, an expert enterprise assistant. Answer the user query clearly and accurately, "
+            "grounded strictly in the provided context passages. Cite your sources using [1], [2], etc. "
+            "Do not make up facts not present in the context. If the context does not contain enough information, "
+            "explicitly state that the information is unavailable."
+        )
+        user_message = f"User Query: {query}\n\nContext Passages:\n{context_text}"
 
-            system_prompt = (
-                "You are SafeStrata AI, an expert enterprise assistant. Answer the user query clearly and accurately, "
-                "grounded strictly in the provided context passages and knowledge graph facts. Cite your sources using [1], [2], etc. "
-                "Do not make up facts not present in the context."
-            )
-            user_message = f"User Query: {query}\n\nContext Passages:\n{context_text}"
-            if graph_text:
-                user_message += f"\n\nKnowledge Graph Facts:\n{graph_text}"
-            generation_mode = "grounded"
-        else:
-            # Dynamic prompt for out-of-domain / general queries (like ChatGPT / Gemini / Claude)
-            system_prompt = (
-                "You are SafeStrata AI, an intelligent, helpful AI assistant. "
-                "Answer the user's question clearly, thoroughly, and accurately with explanations, code examples, or definitions as appropriate."
-            )
-            user_message = query
-            generation_mode = "general_knowledge"
-
-        # Dispatch to provider
         answer = None
-        if "gemini" in active_provider and active_key:
+        if "gemini" in active_provider:
             answer = self._call_gemini(system_prompt, user_message, active_key, model_name)
-        elif "openai" in active_provider and active_key:
+        elif "openai" in active_provider:
             answer = self._call_openai(system_prompt, user_message, active_key, model_name)
-        elif "anthropic" in active_provider and active_key:
+        elif "anthropic" in active_provider:
             answer = self._call_anthropic(system_prompt, user_message, active_key, model_name)
-
-        # If external provider was not used or failed, call local HF generative model
-        if not answer and active_provider != "synthesis":
+        elif "local" in active_provider:
             answer = self._call_local_hf(system_prompt, user_message)
 
-        # If local HF model is unavailable, fall back to extractive synthesis
+        # Fallback to local extractive grounded synthesis
         if not answer:
-            if is_grounded:
-                return self._local_grounded_synthesis(query, relevant_chunks, graph_facts, citations)
-            else:
-                answer = self._local_knowledge_fallback(query)
-
-        # Append transparent indicator if answered via general knowledge
-        if not is_grounded:
-            answer += "\n\n*(Note: No matching documents in your local SafeStrata index for this query. Generated dynamically using AI general intelligence.)*"
+            return self._local_grounded_synthesis(query, relevant_chunks, citations)
 
         return {
             "answer": answer,
             "citations": citations,
-            "generation_mode": generation_mode
+            "is_grounded": True
         }
 
     def _call_local_hf(self, system_prompt: str, user_message: str) -> Optional[str]:
@@ -143,7 +126,9 @@ class GroundedGenerator:
             logger.warning(f"Local generative LLM inference error: {e}")
             return None
 
-    def _call_gemini(self, system_prompt: str, user_message: str, api_key: str, model_name: Optional[str]) -> Optional[str]:
+    def _call_gemini(self, system_prompt: str, user_message: str, api_key: str, model_name: Optional[str]) -> str:
+        if not api_key:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Gemini API key not configured")
         model = model_name or "gemini-1.5-flash"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         payload = {
@@ -161,12 +146,23 @@ class GroundedGenerator:
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
                             return parts[0].get("text", "").strip()
-                logger.warning(f"Gemini API returned status {res.status_code}: {res.text}")
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Empty response from Gemini")
+                elif res.status_code in (401, 403):
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Gemini authentication failed ({res.status_code})")
+                elif res.status_code == 429:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Gemini rate limit exceeded (429)")
+                else:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Gemini API returned error ({res.status_code}): {res.text}")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Gemini API request timed out")
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.warning(f"Gemini API call failed: {e}")
-        return None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Gemini API error: {e}")
 
-    def _call_openai(self, system_prompt: str, user_message: str, api_key: str, model_name: Optional[str]) -> Optional[str]:
+    def _call_openai(self, system_prompt: str, user_message: str, api_key: str, model_name: Optional[str]) -> str:
+        if not api_key:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="OpenAI API key not configured")
         model = model_name or settings.LLM_MODEL_NAME or "gpt-4o-mini"
         payload = {
             "model": model,
@@ -186,12 +182,22 @@ class GroundedGenerator:
                 )
                 if res.status_code == 200:
                     return res.json()["choices"][0]["message"]["content"].strip()
-                logger.warning(f"OpenAI API returned status {res.status_code}: {res.text}")
+                elif res.status_code in (401, 403):
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"OpenAI authentication failed ({res.status_code})")
+                elif res.status_code == 429:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="OpenAI rate limit exceeded (429)")
+                else:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"OpenAI API returned error ({res.status_code}): {res.text}")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="OpenAI API request timed out")
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.warning(f"OpenAI API call failed: {e}")
-        return None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"OpenAI API error: {e}")
 
-    def _call_anthropic(self, system_prompt: str, user_message: str, api_key: str, model_name: Optional[str]) -> Optional[str]:
+    def _call_anthropic(self, system_prompt: str, user_message: str, api_key: str, model_name: Optional[str]) -> str:
+        if not api_key:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Anthropic API key not configured")
         model = model_name or "claude-3-5-sonnet-20241022"
         payload = {
             "model": model,
@@ -208,19 +214,26 @@ class GroundedGenerator:
                 )
                 if res.status_code == 200:
                     return res.json()["content"][0]["text"].strip()
-                logger.warning(f"Anthropic API returned status {res.status_code}: {res.text}")
+                elif res.status_code in (401, 403):
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Anthropic authentication failed ({res.status_code})")
+                elif res.status_code == 429:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Anthropic rate limit exceeded (429)")
+                else:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Anthropic API returned error ({res.status_code}): {res.text}")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Anthropic API request timed out")
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.warning(f"Anthropic API call failed: {e}")
-        return None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Anthropic API error: {e}")
 
     def _local_grounded_synthesis(
         self,
         query: str,
         context_chunks: List[ScoredChunk],
-        graph_facts: Optional[List[str]],
         citations: List[Citation]
     ) -> Dict[str, Any]:
-        """Synthesizes high-fidelity grounded answer directly from top ranked passages and graph facts."""
+        """Synthesizes high-fidelity grounded answer directly from top ranked passages with explicit citations."""
         top_passages = [c.content.strip() for c in context_chunks[:3]]
         paragraphs = []
         for i, passage in enumerate(top_passages, start=1):
@@ -229,29 +242,11 @@ class GroundedGenerator:
             paragraphs.append(f"{core_info} [{i}]")
 
         answer_body = " ".join(paragraphs) if paragraphs else "No relevant information found."
-        if graph_facts:
-            facts_summary = " ".join([f"{f.rstrip('.')}." for f in graph_facts[:3]])
-            answer_body += f"\n\n**Knowledge Graph Context**: {facts_summary}"
 
         return {
             "answer": answer_body,
             "citations": citations,
-            "generation_mode": "grounded"
+            "is_grounded": True
         }
-
-    def _local_knowledge_fallback(self, query: str) -> str:
-        q_lower = query.lower()
-        if "jwt" in q_lower:
-            return (
-                "**JSON Web Token (JWT)** is an open industry standard (RFC 7519) used for securely transmitting "
-                "information between parties as a compact JSON object. A JWT consists of three parts separated by dots: "
-                "a Header (specifying algorithm and token type), a Payload (containing user identity and permission claims), "
-                "and a Cryptographic Signature ensuring data tamper-resistance."
-            )
-        return (
-            f"Regarding your query **'{query}'**: The SafeStrata AI Assistant has analyzed your prompt. "
-            "To get grounded responses with source citations, ingest relevant documents into the knowledge base "
-            "using the Multi-Level Chunking tab."
-        )
 
 generator = GroundedGenerator()

@@ -100,13 +100,19 @@ class ChromaVectorStore:
             dense_sim = max(0.0, min(1.0, 1.0 - dist))
             doc_id = metas[i].get("document_id", "unknown") if metas and metas[i] else "unknown"
 
+            meta_dict = metas[i] if metas else {}
+            c_start = int(meta_dict.get("start_char", meta_dict.get("char_start", 0)))
+            c_end = int(meta_dict.get("end_char", meta_dict.get("char_end", 0)))
+
             scored_chunks.append(ScoredChunk(
                 id=ids[i],
                 document_id=doc_id,
                 content=docs[i],
-                metadata=metas[i] if metas else {},
+                metadata=meta_dict,
                 dense_score=dense_sim,
-                final_score=dense_sim
+                final_score=dense_sim,
+                char_start=c_start,
+                char_end=c_end
             ))
 
         return scored_chunks

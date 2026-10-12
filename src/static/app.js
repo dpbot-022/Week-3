@@ -12,10 +12,6 @@ document.addEventListener("DOMContentLoaded", () => {
       tab.classList.add("active");
       const activePanel = document.getElementById(target);
       if (activePanel) activePanel.classList.add("active");
-
-      if (target === "tab-graph") {
-        loadKnowledgeGraph();
-      }
     });
   });
 
@@ -23,18 +19,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const sampleDocText = `# Advanced Hybrid Search RAG Pipeline & Neural Architecture
 
 ## 1. Hybrid Search Architecture
-Hybrid search combines the semantic precision of dense vector embeddings with the exact keyword recall of sparse BM25 retrieval. In dense retrieval, local Hugging Face Sentence Transformers (such as all-MiniLM-L6-v2) encode queries and passages into 384-dimensional dense vectors stored within open-source vector databases like ChromaDB or Qdrant. In sparse retrieval, the BM25Okapi algorithm indexes vocabulary frequencies and penalizes document length.
+Hybrid search combines the semantic precision of dense vector embeddings with the exact keyword recall of sparse BM25 retrieval. In dense retrieval, local Hugging Face Sentence Transformers (such as all-MiniLM-L6-v2) encode queries and passages into 384-dimensional dense vectors stored within open-source vector databases like ChromaDB. In sparse retrieval, the BM25Okapi algorithm indexes vocabulary frequencies and penalizes document length.
 
 ## 2. Reciprocal Rank Fusion & Reranking
 To combine disparate dense cosine scores and sparse BM25 logits without manual normalization bias, the pipeline utilizes Reciprocal Rank Fusion (RRF):
 RRF(d) = sum(1 / (k + rank_i(d))) with k set to 60.
 Following fusion, a neural Cross-Encoder model (ms-marco-MiniLM-L-6-v2) computes joint cross-attention over query-document pairs, recalibrating the final ranking order.
 
-## 3. Knowledge Graph Traversal
-The architecture integrates NetworkX to maintain a persistent directed knowledge graph. Named entity extraction categorizes Technologies (such as ChromaDB, Docker, FastAPI), Organizations (Google, Meta, OpenAI), and Concepts (Hybrid Search, Guardrails). Multi-hop graph traversal extracts structural relationship facts to inject enriched context into downstream prompts.
-
-## 4. Multi-Tier Security & Guardrails
-Enterprise AI systems require rigorous defense against prompt injections, jailbreak attacks (such as "Ignore previous instructions"), and PII leakage. The Presidio-inspired pattern engine scans and redacts emails, telephone numbers, Social Security Numbers (SSN), API keys, and internal IP addresses before query routing. Output guardrails verify factual faithfulness and prevent hallucinated assertions.`;
+## 3. Multi-Tier Security & Guardrails
+Enterprise AI systems require rigorous defense against prompt injections, jailbreak attacks (such as "Ignore previous instructions"), and PII leakage. The regex PII detector engine scans and redacts emails, telephone numbers, Social Security Numbers (SSN), API keys, Indian PAN, Aadhaar, and internal IP addresses before query routing. Output guardrails verify factual faithfulness and prevent hallucinated assertions.`;
 
   const docContentInput = document.getElementById("doc-content-input");
   if (docContentInput) docContentInput.value = sampleDocText;
@@ -100,7 +93,6 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
         search_mode: "hybrid",
         use_reranker: document.getElementById("rag-toggle-reranker").checked,
         use_hyde: document.getElementById("rag-toggle-hyde").checked,
-        use_knowledge_graph: document.getElementById("rag-toggle-kg").checked,
         guardrails_enabled: document.getElementById("rag-toggle-guardrails").checked,
         llm_provider: ragLlmProviderSelect ? ragLlmProviderSelect.value : "local",
         api_key: ragApiKeyInput ? ragApiKeyInput.value.trim() : null
@@ -124,14 +116,20 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
       metricLatency.textContent = latencyMs + " ms";
       ragLatencyBadge.textContent = `${latencyMs} ms (${citations.length} Sources)`;
 
-      // Mode Badge
+      // Mode Badge (strictly require >=1 citation and passed support check)
       if (ragModeBadge) {
-        if (data.generation_mode === "grounded") {
+        if (data.status === "answered" && data.is_grounded && citations.length >= 1) {
           ragModeBadge.textContent = "Grounded in RAG Documents";
           ragModeBadge.className = "badge badge-green";
+        } else if (data.status === "abstained") {
+          ragModeBadge.textContent = "Abstained (Unverified Context)";
+          ragModeBadge.className = "badge badge-amber";
+        } else if (data.status === "refused") {
+          ragModeBadge.textContent = "Refused (Security Violation)";
+          ragModeBadge.className = "badge badge-red";
         } else {
-          ragModeBadge.textContent = "AI General Intelligence (Dynamic)";
-          ragModeBadge.className = "badge badge-purple";
+          ragModeBadge.textContent = "Ungrounded";
+          ragModeBadge.className = "badge badge-red";
         }
       }
 
@@ -150,7 +148,7 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
       if (citations.length === 0) {
         ragCitationsList.innerHTML = `
           <div class='citation-card'>
-            <em>No matching documents found in knowledge base above relevance threshold (15%). Generated dynamically using AI general intelligence.</em>
+            <em>No citations available. SafeStrata strictly abstains from answering when retrieved passages fail calibrated relevance thresholds.</em>
           </div>
         `;
       } else {
@@ -433,95 +431,71 @@ Enterprise AI systems require rigorous defense against prompt injections, jailbr
   });
 
   // -------------------------------------------------------------
-  // 5. Knowledge Graph
-  // -------------------------------------------------------------
-  const btnRefreshGraph = document.getElementById("btn-refresh-graph");
-  const graphNodeCount = document.getElementById("graph-node-count");
-  const graphEdgeCount = document.getElementById("graph-edge-count");
-  const graphEntitiesDisplay = document.getElementById("graph-entities-display");
-
-  btnRefreshGraph.addEventListener("click", loadKnowledgeGraph);
-
-  async function loadKnowledgeGraph() {
-    try {
-      const res = await fetch("/api/v1/graph");
-      const data = await parseResponse(res);
-      const nodes = data.nodes || [];
-      const edges = data.edges || [];
-      graphNodeCount.textContent = data.total_nodes != null ? data.total_nodes : nodes.length;
-      graphEdgeCount.textContent = data.total_edges != null ? data.total_edges : edges.length;
-
-      graphEntitiesDisplay.innerHTML = "";
-      if (nodes.length === 0) {
-        graphEntitiesDisplay.innerHTML = "<div class='entity-pill'>No entities currently indexed. Ingest a document to extract entities and build relationships.</div>";
-        return;
-      }
-
-      nodes.forEach(n => {
-        const pill = document.createElement("div");
-        pill.className = "entity-pill";
-        const relEdges = edges.filter(e => e.source === n.id || e.target === n.id);
-        const relSummary = relEdges.map(e => `${e.source === n.id ? '→ ' + e.relation + ' ' + e.target : '← ' + e.relation + ' ' + e.source}`).join(", ");
-        pill.innerHTML = `
-          <div style="font-weight: 600; color: var(--accent-cyan);">${n.name}</div>
-          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Type: ${n.entity_type}</div>
-          <div style="font-size: 0.75rem; color: var(--text-sub);">${relSummary || 'No connected edges'}</div>
-        `;
-        graphEntitiesDisplay.appendChild(pill);
-      });
-    } catch (err) {
-      console.error("Error loading knowledge graph:", err);
-    }
-  }
-
-  // -------------------------------------------------------------
-  // 6. Automated Evaluations
+  // 5. Automated Evaluations
   // -------------------------------------------------------------
   const btnRunBenchmark = document.getElementById("btn-run-benchmark");
   const benchmarkSummaryBox = document.getElementById("benchmark-summary-box");
   const benchmarkTableBody = document.getElementById("benchmark-table-body");
 
-  btnRunBenchmark.addEventListener("click", async () => {
-    btnRunBenchmark.disabled = true;
-    btnRunBenchmark.textContent = "Executing Benchmark Suite...";
+  if (btnRunBenchmark) {
+    btnRunBenchmark.addEventListener("click", async () => {
+      btnRunBenchmark.disabled = true;
+      btnRunBenchmark.textContent = "Executing Evaluation Suite...";
 
-    try {
-      const res = await fetch("/api/v1/evaluations/benchmark", {
-        method: "POST"
-      });
-      const data = await parseResponse(res);
+      try {
+        const res = await fetch("/api/v1/evaluations/benchmark", {
+          method: "POST"
+        });
+        const data = await parseResponse(res);
 
-      benchmarkSummaryBox.style.display = "block";
-      benchmarkSummaryBox.innerHTML = `
-        <strong>🏆 Best Performing Architecture:</strong> ${(data.best_performing_mode || 'HYBRID').toUpperCase()}<br>
-        <span style="font-size: 0.85rem; color: var(--text-muted);">${data.analysis || ''}</span>
-      `;
-
-      benchmarkTableBody.innerHTML = "";
-      const aggMetrics = data.aggregate_metrics || {};
-      for (const [mode, metrics] of Object.entries(aggMetrics)) {
-        const row = document.createElement("tr");
-        const isBest = mode === data.best_performing_mode;
-        row.innerHTML = `
-          <td style="font-weight: ${isBest ? '700' : '500'}; color: ${isBest ? 'var(--accent-emerald)' : 'var(--text-main)'};">
-            ${mode} ${isBest ? '⭐' : ''}
-          </td>
-          <td>${((metrics.avg_context_precision || 0) * 100).toFixed(1)}%</td>
-          <td>${((metrics.avg_context_recall || 0) * 100).toFixed(1)}%</td>
-          <td>${((metrics.avg_faithfulness || 0) * 100).toFixed(1)}%</td>
-          <td>${((metrics.avg_answer_relevance || 0) * 100).toFixed(1)}%</td>
-          <td>${metrics.avg_latency_ms || 0} ms</td>
-          <td style="font-weight: 700; color: var(--accent-cyan);">${((metrics.composite_quality_score || 0) * 100).toFixed(1)}%</td>
+        benchmarkSummaryBox.style.display = "block";
+        const latencyP50 = data.latency?.p50_ms != null ? data.latency.p50_ms.toFixed(2) : "N/A";
+        const latencyP95 = data.latency?.p95_ms != null ? data.latency.p95_ms.toFixed(2) : "N/A";
+        benchmarkSummaryBox.innerHTML = `
+          <strong>📊 Gold Dataset Evaluation (${data.test_size} Test Queries, Hash: ${(data.dataset_hash || '').substring(0, 10)}...):</strong><br>
+          <span style="font-size: 0.85rem; color: var(--text-muted);">
+            Latency p50: ${latencyP50} ms | Latency p95: ${latencyP95} ms (warm-up excluded) | Bootstrap 95% CIs (B=1000)
+          </span>
         `;
-        benchmarkTableBody.appendChild(row);
+
+        benchmarkTableBody.innerHTML = "";
+        const ablations = data.ablations || {};
+        const configNames = {
+          "dense": "Dense Only (MiniLM)",
+          "sparse": "Sparse Only (BM25)",
+          "hybrid": "Hybrid RRF (Dense + BM25)",
+          "hybrid_rerank": "Hybrid + Cross-Encoder Rerank",
+          "hybrid_rerank_hyde": "Hybrid + Rerank + HyDE"
+        };
+
+        for (const [mode, metrics] of Object.entries(ablations)) {
+          const row = document.createElement("tr");
+          const isHybridRerank = mode === "hybrid_rerank";
+          const formatCI = (ci) => {
+            if (!ci) return "N/A";
+            return `${(ci.mean * 100).toFixed(1)}% <span style="font-size: 0.75rem; color: var(--text-muted);">[${(ci.ci_lower * 100).toFixed(1)}%, ${(ci.ci_upper * 100).toFixed(1)}%]</span>`;
+          };
+
+          row.innerHTML = `
+            <td style="font-weight: ${isHybridRerank ? '700' : '500'}; color: ${isHybridRerank ? 'var(--accent-emerald)' : 'var(--text-main)'};">
+              ${configNames[mode] || mode} ${isHybridRerank ? '⭐' : ''}
+            </td>
+            <td>${formatCI(metrics.recall_at_5)}</td>
+            <td>${formatCI(metrics.mrr)}</td>
+            <td>${formatCI(metrics.ndcg_at_5)}</td>
+            <td>${formatCI(metrics.faithfulness_nli)}</td>
+            <td>${formatCI(metrics.answer_relevance_embedding)}</td>
+          `;
+          benchmarkTableBody.appendChild(row);
+        }
+      } catch (err) {
+        alert("Error running benchmark: " + err.message);
+      } finally {
+        btnRunBenchmark.disabled = false;
+        btnRunBenchmark.textContent = "Run Automated Benchmark";
       }
-    } catch (err) {
-      alert("Error running benchmark: " + err.message);
-    } finally {
-      btnRunBenchmark.disabled = false;
-      btnRunBenchmark.textContent = "Run Automated Benchmark";
-    }
-  });
+    });
+  }
 
   // Initial auto-ingest of sample doc if empty index
   fetch("/api/v1/health")

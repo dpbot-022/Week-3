@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Body
 from src.schemas.models import (
     IngestDocumentRequest, IngestResponse, ChunkPreviewRequest,
-    ChunkingStrategy, Chunk
+    ChunkingStrategy, Chunk, ChunkPreviewResponse, ResetResponse
 )
 from src.ingestion.chunkers import get_chunker
 from src.ingestion.parsers import DocumentParser
@@ -71,7 +71,7 @@ async def ingest_document(
         latency_ms=latency
     )
 
-@router.post("/preview-chunking")
+@router.post("/preview-chunking", response_model=ChunkPreviewResponse)
 async def preview_chunking(request: ChunkPreviewRequest):
     """Previews chunking behavior for interactive visualization across strategies."""
     start_time = time.time()
@@ -85,14 +85,14 @@ async def preview_chunking(request: ChunkPreviewRequest):
     chunks = chunker.chunk(request.text, temp_doc_id)
     latency = round((time.time() - start_time) * 1000, 2)
 
-    return {
-        "strategy": request.strategy,
-        "chunk_count": len(chunks),
-        "chunks": chunks,
-        "latency_ms": latency
-    }
+    return ChunkPreviewResponse(
+        strategy=request.strategy,
+        chunk_count=len(chunks),
+        chunks=chunks,
+        latency_ms=latency
+    )
 
-@router.post("/reset")
+@router.post("/reset", response_model=ResetResponse)
 async def reset_documents(
     vector_store=Depends(get_vector_store),
     knowledge_graph=Depends(get_knowledge_graph)
@@ -102,4 +102,4 @@ async def reset_documents(
     bm25_engine.index_documents([])
     knowledge_graph.graph.clear()
     knowledge_graph.save()
-    return {"status": "success", "message": "All vector store and knowledge graph data reset."}
+    return ResetResponse(status="success", message="All vector store and knowledge graph data reset.")
