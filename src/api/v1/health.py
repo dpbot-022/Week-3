@@ -7,6 +7,7 @@ from src.schemas.models import HealthResponse, MetricsResponse
 router = APIRouter(tags=["Health & Telemetry"])
 
 @router.get("/health", response_model=HealthResponse)
+@router.get("/healthz", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint providing vector store status, model info, and uptime."""
     doc_count = vector_store.count()

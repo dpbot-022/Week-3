@@ -67,6 +67,37 @@ cp .env.example .env
 ```
 *(Runs out of the box with local Hugging Face models and local generation. Optional OpenAI, Gemini, or Anthropic integration available via environment keys.)*
 
+#### 🔐 Passwordless JWT & Genuine Email OTP Setup
+SafeStrata features an enterprise-grade, Google Sign-in style passwordless authentication flow via async SMTP:
+
+1. **JWT & Security Keys**:
+   - `JWT_SECRET`: 64+ character cryptographically secure secret (generate with `openssl rand -hex 32`). **Server refuses to start without this key configured.**
+   - `OTP_PEPPER`: Server-side secret pepper for HMAC-SHA256 OTP hashing.
+
+2. **Gmail SMTP Configuration (Testing & Production)**:
+   - Go to your Google Account -> **Security** -> enable **2-Step Verification**.
+   - Search for **App passwords** (or go to `myaccount.google.com/apppasswords`).
+   - Create an app named `SafeStrata` and copy the 16-character password.
+   - Configure in `.env`:
+     ```env
+     SMTP_HOST=smtp.gmail.com
+     SMTP_PORT=587
+     SMTP_USERNAME=your-account@gmail.com
+     SMTP_PASSWORD=xxxx xxxx xxxx xxxx
+     SMTP_FROM=your-account@gmail.com
+     SMTP_STARTTLS=true
+     SMTP_SSL=false
+     ```
+
+3. **Production Email Deliverability (SPF, DKIM, DMARC)**:
+   To ensure genuine OTP verification emails land directly in the user's primary inbox rather than Spam or Quarantine:
+   - **SPF (Sender Policy Framework)**: Publish a DNS TXT record on your domain authorizing your mail server:
+     `v=spf1 include:_spf.google.com ~all` (or your mail relay's IP).
+   - **DKIM (DomainKeys Identified Mail)**: Configure 2048-bit asymmetric cryptographic signatures on outgoing mail so receiving MTAs verify message integrity.
+   - **DMARC (Domain-based Message Authentication, Reporting, and Conformance)**: Add a DNS TXT record at `_dmarc.yourdomain.com`:
+     `v=DMARC1; p=reject; rua=mailto:dmarc-reports@yourdomain.com; pct=100; adkim=s; aspf=s`
+   - **Headers & Formatting**: SafeStrata automatically generates compliant RFC 5322 `Message-ID`, `Date`, `From`, `Reply-To`, and multipart `text/plain` + `text/html` bodies with clear anti-phishing warnings.
+
 ### 3. Seed Demo Data & Run
 ```bash
 # Seed local knowledge base
@@ -76,8 +107,25 @@ python scripts/seed_demo_data.py
 uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 Open your browser at:
-- **Interactive Web Playground**: [http://localhost:8001/](http://localhost:8001/)
+- **Interactive Web Playground (Login Wall)**: [http://localhost:8001/](http://localhost:8001/)
 - **Interactive OpenAPI / Swagger Docs**: [http://localhost:8001/docs](http://localhost:8001/docs)
+
+---
+
+## 🔒 Authentication & Full Login Wall Architecture
+
+- **Single Sign-In / Sign-Up Flow**: Users enter their email at `/api/v1/auth/request-otp`. If the email is valid, a genuine 6-digit OTP is delivered via async SMTP (`aiosmtplib`).
+- **Timing & Enumeration Defense**: Responses are strictly identical for existing and new users (`"If this email is valid, a verification code has been sent."`), preventing user enumeration.
+- **Cryptographic Security**:
+  - OTPs are stored solely as **HMAC-SHA256 hashes** peppered with `OTP_PEPPER`—the raw code is never stored in memory or databases.
+  - The OTP code is **never returned** in any API response JSON, header, or log line.
+  - Single-use only, 10-minute expiry, max 5 attempts before permanent invalidation, and 60-second resend cooldown.
+- **Dual-Token JWT Architecture**:
+  - **Access Token**: Short-lived (15 minutes), algorithm pinned to `HS256`, containing standard claims (`sub`, `jti`, `iss`, `aud`, `iat`, `exp`). Maintained strictly **in memory** by the frontend client (never in `localStorage` or `sessionStorage`).
+  - **Refresh Token**: Long-lived (7 days), stored in a cryptographically secured `httpOnly`, `SameSite=Lax` cookie (`Secure` in production).
+  - **Family Token Rotation**: Every refresh generates a new token pair and revokes the predecessor. If an old refresh token is reused (indicating token replay/theft), the entire token family is immediately revoked, forcing all active sessions for that family to re-authenticate.
+- **Protected Core Endpoints**: All knowledge retrieval, chunk previewing, document ingestion, guardrails checking, and benchmark evaluation endpoints require `Depends(get_current_user)`.
+- **Frontend Isolation Wall**: The dashboard UI and data queries are quarantined in a `<template id="dashboard-template">`. No dashboard DOM elements exist or execute network requests until user authentication is verified. Transparent 401 interceptor automatically refreshes access tokens without disrupting user experience.
 
 ---
 

@@ -2,7 +2,7 @@ import time
 import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -74,18 +74,29 @@ async def add_process_time_and_request_id(request: Request, call_next):
             headers={"X-Request-ID": request_id, "X-Process-Time-MS": str(process_time)}
         )
 
+from src.api.v1.auth import router as auth_router
+from src.api.deps import get_current_user
+
 # Mount Static Files
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Mount API Routers
+# Root /healthz for load balancers & monitoring
+@app.get("/healthz", include_in_schema=False)
+async def root_healthz():
+    return {"status": "healthy"}
+
+# Mount Public API Routers
 app.include_router(health_router, prefix=settings.API_V1_STR)
-app.include_router(documents_router, prefix=settings.API_V1_STR)
-app.include_router(search_router, prefix=settings.API_V1_STR)
-app.include_router(rag_router, prefix=settings.API_V1_STR)
-app.include_router(guardrails_router, prefix=settings.API_V1_STR)
-app.include_router(graph_router, prefix=settings.API_V1_STR)
-app.include_router(evals_router, prefix=settings.API_V1_STR)
+app.include_router(auth_router, prefix=settings.API_V1_STR)
+
+# Mount Protected API Routers (enforcing JWT Bearer token authentication)
+app.include_router(documents_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
+app.include_router(search_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
+app.include_router(rag_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
+app.include_router(guardrails_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
+app.include_router(graph_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
+app.include_router(evals_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
 
 # Serve Web UI
 @app.get("/", include_in_schema=False)
