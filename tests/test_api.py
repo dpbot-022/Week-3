@@ -109,6 +109,12 @@ def test_ingest_and_rag_query():
     assert "answer" in rag_data
     assert len(rag_data["citations"]) >= 1
 
+    # Execute RAG stream as analyst
+    stream_res = client.post("/api/v1/rag/stream", json=rag_payload, headers=get_auth_headers("analyst"))
+    assert stream_res.status_code == 200
+    assert "text/event-stream" in stream_res.headers.get("content-type", "")
+    assert "event: complete" in stream_res.text
+
     # Test per-document delete
     del_res = client.delete(f"/api/v1/documents/{doc_id}", headers=get_auth_headers("compliance_manager"))
     assert del_res.status_code == 200
