@@ -1,15 +1,20 @@
 import time
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from typing import Optional
 from src.schemas.models import GuardrailCheckRequest, GuardrailReport, GuardrailAuditReport, PIIEntityInfo
 from src.guardrails.pii_guard import pii_guard
 from src.guardrails.injection_guard import injection_guard
 from src.core.config import settings
+from src.auth.deps import get_current_user
+from src.db.models import User
 
 router = APIRouter(prefix="/guardrails", tags=["Security & Guardrails"])
 
 @router.post("/check", response_model=GuardrailReport)
-async def check_guardrails(request: GuardrailCheckRequest):
+async def check_guardrails(
+    request: GuardrailCheckRequest,
+    current_user: User = Depends(get_current_user)
+):
     """Public evaluation endpoint: returns verdict, generic reason, and PII offset counts.
     Never exposes internal regex patterns or raw PII values.
     """
@@ -29,8 +34,11 @@ async def check_guardrails(request: GuardrailCheckRequest):
     latency = round((time.time() - start_time) * 1000, 2)
     reason = "Potential adversarial prompt injection detected" if inj_threat else None
 
-    # Cast to PIIEntityInfo
-    pii_entities = [PIIEntityInfo(**f) for f in pii_findings]
+    # Cast to PIIEntityInfo without raw text
+    pii_entities = [
+        PIIEntityInfo(entity_type=f["entity_type"], start=f["start"], end=f["end"], count=1)
+        for f in pii_findings
+    ]
 
     return GuardrailReport(
         is_safe=not inj_threat,
@@ -72,7 +80,10 @@ async def audit_guardrails(
 
     latency = round((time.time() - start_time) * 1000, 2)
     reason = "Potential adversarial prompt injection detected" if inj_threat else None
-    pii_entities = [PIIEntityInfo(**f) for f in pii_findings]
+    pii_entities = [
+        PIIEntityInfo(entity_type=f["entity_type"], start=f["start"], end=f["end"], count=1)
+        for f in pii_findings
+    ]
 
     return GuardrailAuditReport(
         is_safe=not inj_threat,

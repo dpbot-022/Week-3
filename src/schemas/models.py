@@ -124,17 +124,6 @@ class GuardrailCheckRequest(StrictBaseModel):
     check_pii: bool = True
     check_injection: bool = True
 
-class RAGRequest(StrictBaseModel):
-    query: str
-    top_k: int = 5
-    search_mode: SearchMode = SearchMode.HYBRID
-    use_reranker: bool = True
-    use_hyde: bool = False
-    guardrails_enabled: bool = True
-    llm_provider: Optional[str] = None  # "local", "gemini", "openai", "anthropic", "synthesis"
-    api_key: Optional[str] = None
-    model_name: Optional[str] = None
-
 class GraphNode(StrictBaseModel):
     id: str
     name: str
@@ -153,27 +142,59 @@ class KnowledgeGraphResponse(StrictBaseModel):
     total_nodes: int
     total_edges: int
 
+class RAGRequest(StrictBaseModel):
+    query: str
+    top_k: int = 5
+    search_mode: SearchMode = SearchMode.HYBRID
+    use_reranker: bool = True
+    use_hyde: bool = False
+    use_knowledge_graph: bool = True
+    guardrails_enabled: bool = True
+    llm_provider: Optional[str] = None
+    api_key: Optional[str] = None
+    model_name: Optional[str] = None
+
 class Citation(StrictBaseModel):
     chunk_id: str
     document_id: str
     snippet: str
     score: float
     rank: int
+    title: str = "Policy Document"
+    page_number: int = 1
     char_start: int = 0
     char_end: int = 0
+    effective_date: Optional[str] = None
+
+class RAGTrace(StrictBaseModel):
+    ranks_before_rerank: List[Dict[str, Any]] = Field(default_factory=list)
+    ranks_after_rerank: List[Dict[str, Any]] = Field(default_factory=list)
+    scores: Dict[str, float] = Field(default_factory=dict)
+    redaction_counts: Dict[str, int] = Field(default_factory=dict)
+    guardrail_verdicts: Dict[str, Any] = Field(default_factory=dict)
+    per_stage_latency_ms: Dict[str, float] = Field(default_factory=dict)
+    model_name: str = ""
 
 class RAGResponse(StrictBaseModel):
     query: str
     answer: str
-    status: str = "answered"  # "answered" or "abstained"
+    status: str = "answered"  # "answered", "abstained", "blocked"
     is_grounded: bool = True
     sanitized_query: str
     citations: List[Citation] = Field(default_factory=list)
+    graph_entities: List[str] = Field(default_factory=list)
     guardrail_report: GuardrailReport
     faithfulness_score: float
     answer_relevance_score: float
     latency_breakdown: Dict[str, float]
     total_latency_ms: float
+    generation_mode: Optional[str] = "grounded"  # "grounded", "abstention", "scope_greeting", "extractive", "blocked"
+    trace: Optional[RAGTrace] = None
+
+class BootstrapCI(StrictBaseModel):
+    mean: float
+    ci_lower: float
+    ci_upper: float
 
 class HealthResponse(StrictBaseModel):
     status: str
@@ -193,29 +214,32 @@ class MetricsResponse(StrictBaseModel):
     latencies: Dict[str, Dict[str, float]]
     uptime_seconds: float
 
-class BootstrapCI(StrictBaseModel):
-    mean: float
-    ci_lower: float
-    ci_upper: float
-
 class EvaluationItem(StrictBaseModel):
-    query_id: str
+    query_id: Optional[str] = None
     query: str
-    category: str
-    recall_at_k: float
-    mrr: float
-    ndcg_at_k: float
-    faithfulness: float
-    answer_relevance: float
-    latency_ms: float
-    status: str
+    category: Optional[str] = None
+    ground_truth: Optional[str] = None
+    context_precision: float = 0.0
+    context_recall: float = 0.0
+    recall_at_k: Optional[float] = None
+    mrr: Optional[float] = None
+    ndcg_at_k: Optional[float] = None
+    faithfulness: float = 0.0
+    answer_relevance: float = 0.0
+    latency_ms: float = 0.0
+    retrieval_mode: Optional[str] = "hybrid"
+    status: Optional[str] = "answered"
 
 class BenchmarkReport(StrictBaseModel):
     timestamp: str
-    git_sha: str
-    dataset_hash: str
-    dataset_size: int
-    test_size: int
-    metrics: Dict[str, BootstrapCI]
-    latency: Dict[str, float]
-    ablations: Dict[str, Dict[str, BootstrapCI]]
+    git_sha: Optional[str] = None
+    dataset_hash: Optional[str] = None
+    dataset_size: Optional[int] = None
+    test_size: Optional[int] = None
+    evaluations: List[EvaluationItem] = Field(default_factory=list)
+    metrics: Optional[Dict[str, BootstrapCI]] = None
+    latency: Optional[Dict[str, float]] = None
+    ablations: Optional[Dict[str, Dict[str, BootstrapCI]]] = None
+    aggregate_metrics: Optional[Dict[str, Dict[str, float]]] = None
+    best_performing_mode: Optional[str] = None
+    analysis: Optional[str] = None
