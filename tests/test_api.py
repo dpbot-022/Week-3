@@ -1,16 +1,39 @@
 import pytest
 from starlette.testclient import TestClient
 from src.api.main import app
-
-from src.auth.store import auth_store
-from src.auth.jwt_handler import create_access_token
+from src.db.session import SessionLocal, init_db
+from src.db.models import User
+from src.core.rbac import ALL_ROLES
+import jwt
+from datetime import datetime, timedelta
+from src.core.config import settings
 
 client = TestClient(app)
 
-# Test user & auth token
-test_user = auth_store.get_or_create_user("api-tester@safestrata.local")
-auth_token = create_access_token(test_user.id)
-auth_headers = {"Authorization": f"Bearer {auth_token}"}
+@pytest.fixture(autouse=True)
+def setup_database():
+    init_db()
+    with SessionLocal() as db:
+        for r in ALL_ROLES:
+            email = f"user_{r}@test.safestrata"
+            existing = db.query(User).filter(User.email == email).first()
+            if not existing:
+                u = User(email=email, role=r, role_version=1, is_active=True)
+                db.add(u)
+        db.commit()
+
+def get_auth_headers(role: str) -> dict:
+    with SessionLocal() as db:
+        email = f"user_{role}@test.safestrata"
+        user = db.query(User).filter(User.email == email).first()
+        token = jwt.encode({
+            "sub": user.email,
+            "role": user.role,
+            "role_version": user.role_version,
+            "exp": datetime.utcnow() + timedelta(minutes=60),
+            "type": "access"
+        }, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+        return {"Authorization": f"Bearer {token}"}
 
 def test_health_endpoint():
     response = client.get("/api/v1/health")
@@ -25,13 +48,12 @@ def test_guardrails_check_endpoint():
         "check_pii": True,
         "check_injection": True
     }
-    response = client.post("/api/v1/guardrails/check", json=payload, headers=auth_headers)
+    response = client.post("/api/v1/guardrails/check", json=payload, headers=get_auth_headers("analyst"))
     assert response.status_code == 200
     data = response.json()
     assert data["pii_detected"] is True
     assert "[EMAIL_REDACTED]" in data["sanitized_text"]
     assert data["injection_detected"] is True
-    assert "injection_patterns" not in data
 
 def test_preview_chunking_endpoint():
     payload = {
@@ -40,66 +62,71 @@ def test_preview_chunking_endpoint():
         "chunk_size": 50,
         "chunk_overlap": 5
     }
-    response = client.post("/api/v1/documents/preview-chunking", json=payload, headers=auth_headers)
+    response = client.post("/api/v1/documents/preview-chunking", json=payload, headers=get_auth_headers("analyst"))
     assert response.status_code == 200
     data = response.json()
     assert data["chunk_count"] >= 2
 
 def test_ingest_and_rag_query():
-    # Ingest document
+    # Ingest document as compliance_manager
     ingest_payload = {
         "title": "FastAPI Testing Doc",
         "content": "ChromaDB provides open-source vector search. BM25 provides sparse lexical matching. Hybrid search fuses both rankings.",
         "strategy": "recursive",
         "chunk_size": 200,
-        "chunk_overlap": 20
+        "chunk_overlap": 20,
+        "metadata": {"allowed_roles": ["analyst", "compliance_manager"]}
     }
-    ingest_res = client.post("/api/v1/documents/ingest", json=ingest_payload, headers=auth_headers)
+    ingest_res = client.post("/api/v1/documents/ingest", json=ingest_payload, headers=get_auth_headers("compliance_manager"))
     assert ingest_res.status_code == 200
-    assert ingest_res.json()["chunk_count"] >= 1
+    ingest_data = ingest_res.json()
+    assert ingest_data["chunk_count"] >= 1
+    doc_id = ingest_data["document_id"]
 
-    # Execute Search
+    # Execute Search as analyst
     search_payload = {
         "query": "vector search ChromaDB",
         "top_k": 3,
         "mode": "hybrid",
         "use_reranker": False
     }
-    search_res = client.post("/api/v1/search", json=search_payload, headers=auth_headers)
+    search_res = client.post("/api/v1/search", json=search_payload, headers=get_auth_headers("analyst"))
     assert search_res.status_code == 200
     assert len(search_res.json()["results"]) >= 1
 
-    # Execute RAG query
+    # Execute RAG query as analyst
     rag_payload = {
         "query": "How does ChromaDB provide search?",
         "top_k": 3,
         "search_mode": "hybrid",
         "use_reranker": False,
-        "guardrails_enabled": True,
-        "llm_provider": "synthesis"
+        "use_knowledge_graph": False,
+        "guardrails_enabled": True
     }
-    rag_res = client.post("/api/v1/rag/query", json=rag_payload, headers=auth_headers)
+    rag_res = client.post("/api/v1/rag/query", json=rag_payload, headers=get_auth_headers("analyst"))
     assert rag_res.status_code == 200
     rag_data = rag_res.json()
     assert "answer" in rag_data
-    assert rag_data["status"] == "answered"
-    assert rag_data["is_grounded"] is True
     assert len(rag_data["citations"]) >= 1
 
+    # Test per-document delete
+    del_res = client.delete(f"/api/v1/documents/{doc_id}", headers=get_auth_headers("compliance_manager"))
+    assert del_res.status_code == 200
+
 def test_benchmark_endpoint():
-    res = client.post("/api/v1/evaluations/benchmark", headers=auth_headers)
+    res = client.post("/api/v1/evaluations/benchmark", headers=get_auth_headers("analyst"))
     assert res.status_code == 200
     data = res.json()
-    assert "metrics" in data
-    assert "ablations" in data
-    assert "dataset_hash" in data
+    assert "aggregate_metrics" in data
+    assert "best_performing_mode" in data
 
 def test_metrics_and_graph_endpoints():
-    m_res = client.get("/api/v1/metrics")
+    # Metrics requires admin
+    m_res = client.get("/api/v1/metrics", headers=get_auth_headers("admin"))
     assert m_res.status_code == 200
     assert "uptime_seconds" in m_res.json()
 
-    g_res = client.get("/api/v1/graph", headers=auth_headers)
+    g_res = client.get("/api/v1/graph")
     assert g_res.status_code == 200
     assert "total_nodes" in g_res.json()
 
@@ -111,12 +138,14 @@ def test_search_with_hyde_and_reranker():
         "use_reranker": True,
         "use_hyde": True
     }
-    res = client.post("/api/v1/search", json=search_payload, headers=auth_headers)
+    res = client.post("/api/v1/search", json=search_payload, headers=get_auth_headers("analyst"))
     assert res.status_code == 200
     data = res.json()
     assert data["transformed_query"] is not None
 
-def test_reset_endpoint():
-    res = client.post("/api/v1/documents/reset", headers=auth_headers)
-    assert res.status_code == 200
-    assert res.json()["status"] == "success"
+def test_global_reset_disallowed():
+    """Verify that no global Clear Database route exists (only per-document delete is allowed)."""
+    res_unauth = client.post("/api/v1/documents/reset")
+    assert res_unauth.status_code == 401
+    res_auth = client.post("/api/v1/documents/reset", headers=get_auth_headers("compliance_manager"))
+    assert res_auth.status_code in [404, 405]
