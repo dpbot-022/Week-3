@@ -6,9 +6,10 @@ from chromadb.config import Settings as ChromaSettings
 from src.core.config import settings
 from src.core.logging import logger
 from src.schemas.models import Chunk, ScoredChunk
+from src.core.rbac import ALL_ROLES
 
 class ChromaVectorStore:
-    """Production ChromaDB vector store repository."""
+    """Production ChromaDB vector store repository with metadata role filtering."""
     def __init__(self, persist_dir: str = settings.CHROMA_PERSIST_DIR):
         self.persist_dir = persist_dir
         os.makedirs(self.persist_dir, exist_ok=True)
@@ -31,6 +32,7 @@ class ChromaVectorStore:
         self,
         chunks: List[Chunk],
         embeddings: List[List[float]],
+        allowed_roles: Optional[List[str]] = None,
         collection_name: str = settings.DEFAULT_COLLECTION_NAME
     ):
         if not chunks:
@@ -41,15 +43,28 @@ class ChromaVectorStore:
         documents = [chunk.content for chunk in chunks]
         metadatas = []
         for chunk in chunks:
+            roles = chunk.metadata.get("allowed_roles") or allowed_roles or ["viewer", "analyst", "compliance_manager", "auditor"]
+            if isinstance(roles, str):
+                roles = [r.strip() for r in roles.split(",")]
+
             meta = {
                 "document_id": chunk.document_id,
                 "chunk_index": chunk.chunk_index,
-                "strategy": chunk.strategy.value,
+                "strategy": chunk.strategy.value if hasattr(chunk.strategy, "value") else str(chunk.strategy),
                 "character_count": chunk.character_count,
+                "char_start": chunk.char_start,
+                "char_end": chunk.char_end,
+                "page_number": int(chunk.metadata.get("page_number", 1)),
+                "title": str(chunk.metadata.get("title", "Document")),
+                "allowed_roles": ",".join(roles),
             }
-            # Flatten any simple metadata
+            # Add explicit role boolean flags for indexed Chroma filtering
+            for r in ALL_ROLES:
+                meta[f"role_{r}"] = (r in roles)
+
+            # Flatten additional simple metadata
             for k, v in chunk.metadata.items():
-                if isinstance(v, (str, int, float, bool)):
+                if k not in meta and isinstance(v, (str, int, float, bool)):
                     meta[f"meta_{k}"] = v
             metadatas.append(meta)
 
@@ -59,12 +74,13 @@ class ChromaVectorStore:
             documents=documents,
             metadatas=metadatas
         )
-        logger.info(f"Upserted {len(chunks)} chunks into Chroma collection '{collection_name}'")
+        logger.info(f"Upserted {len(chunks)} chunks into Chroma collection '{collection_name}' with RBAC tags")
 
     def query_dense(
         self,
         query_embedding: List[float],
         top_k: int = 5,
+        role: Optional[str] = None,
         filter_metadata: Optional[Dict[str, Any]] = None,
         collection_name: str = settings.DEFAULT_COLLECTION_NAME
     ) -> List[ScoredChunk]:
@@ -74,16 +90,31 @@ class ChromaVectorStore:
         if count == 0:
             return []
             
-        n_results = min(top_k, count)
+        n_results = min(top_k * 3, count)  # fetch sufficient candidates
         query_kwargs: Dict[str, Any] = {
             "query_embeddings": [query_embedding],
             "n_results": n_results,
             "include": ["documents", "metadatas", "distances"]
         }
-        if filter_metadata:
-            query_kwargs["where"] = filter_metadata
 
-        results = collection.query(**query_kwargs)
+        # Build where filter with role constraints
+        where_conditions = []
+        if role:
+            where_conditions.append({f"role_{role}": True})
+        if filter_metadata:
+            where_conditions.append(filter_metadata)
+
+        if len(where_conditions) == 1:
+            query_kwargs["where"] = where_conditions[0]
+        elif len(where_conditions) > 1:
+            query_kwargs["where"] = {"$and": where_conditions}
+
+        try:
+            results = collection.query(**query_kwargs)
+        except Exception as e:
+            logger.warning(f"Chroma query error with filter: {e}. Falling back to clean query.")
+            del query_kwargs["where"]
+            results = collection.query(**query_kwargs)
 
         scored_chunks: List[ScoredChunk] = []
         if not results or not results["ids"] or not results["ids"][0]:
@@ -95,27 +126,39 @@ class ChromaVectorStore:
         distances = results["distances"][0]
 
         for i in range(len(ids)):
-            # Convert cosine distance to cosine similarity (1 - dist)
+            meta = metas[i] if metas else {}
+            # Double-check role security gate in case backend where-filter was bypassed
+            if role:
+                if not meta.get(f"role_{role}", False):
+                    continue
+
             dist = distances[i] if distances else 0.0
             dense_sim = max(0.0, min(1.0, 1.0 - dist))
-            doc_id = metas[i].get("document_id", "unknown") if metas and metas[i] else "unknown"
-
-            meta_dict = metas[i] if metas else {}
-            c_start = int(meta_dict.get("start_char", meta_dict.get("char_start", 0)))
-            c_end = int(meta_dict.get("end_char", meta_dict.get("char_end", 0)))
+            doc_id = meta.get("document_id", "unknown")
+            c_start = int(meta.get("char_start", meta.get("meta_char_start", 0)))
+            c_end = int(meta.get("char_end", meta.get("meta_char_end", 0)))
 
             scored_chunks.append(ScoredChunk(
                 id=ids[i],
                 document_id=doc_id,
                 content=docs[i],
-                metadata=meta_dict,
+                metadata=meta,
                 dense_score=dense_sim,
                 final_score=dense_sim,
                 char_start=c_start,
                 char_end=c_end
             ))
 
-        return scored_chunks
+        return scored_chunks[:top_k]
+
+    def delete_document(self, document_id: str, collection_name: str = settings.DEFAULT_COLLECTION_NAME):
+        """Per-document deletion adhering to zero global clear rule."""
+        col = self.get_or_create_collection(collection_name)
+        try:
+            col.delete(where={"document_id": document_id})
+            logger.info(f"Deleted chunks for document '{document_id}' from Chroma collection '{collection_name}'")
+        except Exception as e:
+            logger.error(f"Failed to delete document '{document_id}' from Chroma: {e}")
 
     def count(self, collection_name: str = settings.DEFAULT_COLLECTION_NAME) -> int:
         col = self.get_or_create_collection(collection_name)
@@ -135,13 +178,5 @@ class ChromaVectorStore:
                 "metadata": data["metadatas"][i]
             })
         return chunks
-
-    def reset_collection(self, collection_name: str = settings.DEFAULT_COLLECTION_NAME):
-        try:
-            self.client.delete_collection(name=collection_name)
-            logger.info(f"Deleted Chroma collection '{collection_name}'")
-        except Exception as e:
-            logger.warning(f"Collection reset warning: {e}")
-        self.get_or_create_collection(collection_name)
 
 vector_store = ChromaVectorStore()

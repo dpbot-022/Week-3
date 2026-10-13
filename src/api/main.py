@@ -9,34 +9,55 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import settings
 from src.core.logging import logger
+from src.db.session import init_db, SessionLocal
+from src.retrieval.bm25_search import bm25_manager
+from src.auth.deps import require_permission
+from src.core.rbac import PERM_READ_METRICS
+from src.core.metrics import metrics
+from src.db.models import User
+
 from src.api.v1.health import router as health_router
+from src.api.v1.auth import router as auth_router
+from src.api.v1.admin import router as admin_router
+from src.api.v1.audit import router as audit_router
 from src.api.v1.documents import router as documents_router
 from src.api.v1.search import router as search_router
 from src.api.v1.rag import router as rag_router
 from src.api.v1.guardrails import router as guardrails_router
 from src.api.v1.graph import router as graph_router
 from src.api.v1.evaluations import router as evals_router
+from src.api.v1.quality import router as quality_router
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Initializing Enterprise Hybrid RAG & Guardrails application...")
-    # Warm up local models in background
-    from src.embeddings.provider import embedding_provider
-    from src.retrieval.reranker import reranker
+    logger.info("Initializing SafeStrata Compliance Desk platform...")
+    # 1. Initialize SQLite schema
+    init_db()
+    # 2. Rebuild per-role BM25 indices from SQLite
     try:
-        embedding_provider.encode("system warm-up")
-        logger.info("Local SentenceTransformer initialized.")
+        with SessionLocal() as db:
+            bm25_manager.rebuild_from_db(db)
+        logger.info("Per-role BM25 indices initialized.")
     except Exception as e:
-        logger.warning(f"Embedding warm-up note: {e}")
+        logger.warning(f"BM25 index initialization warning: {e}")
+
+    # 3. Warm up local embeddings
+    from src.embeddings.provider import embedding_provider
+    try:
+        embedding_provider.encode("SafeStrata system warm-up")
+        logger.info("SentenceTransformer embeddings warm.")
+    except Exception as e:
+        logger.warning(f"Embedding warm-up warning: {e}")
+
     yield
-    logger.info("Shutting down Enterprise Hybrid RAG application.")
+    logger.info("SafeStrata shutdown.")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.PROJECT_VERSION,
-    description="Production-grade Hybrid Search RAG pipeline with local Hugging Face models, PII guardrails, and automated evaluations.",
+    description="SafeStrata: Production-Grade Layered Hybrid Search RAG Pipeline with RBAC, Email-OTP, and Automated Evaluations.",
     lifespan=lifespan
 )
 
@@ -67,36 +88,39 @@ async def add_process_time_and_request_id(request: Request, call_next):
             status_code=500,
             content={
                 "error": "Internal Server Error",
-                "message": "An unexpected internal server error occurred.",
+                "message": str(exc),
                 "request_id": request_id,
                 "latency_ms": process_time
             },
             headers={"X-Request-ID": request_id, "X-Process-Time-MS": str(process_time)}
         )
 
-from src.api.v1.auth import router as auth_router
-from src.api.deps import get_current_user
-
 # Mount Static Files
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Root /healthz for load balancers & monitoring
+# Mount API Routers
+app.include_router(health_router, prefix=settings.API_V1_STR)
+app.include_router(auth_router, prefix=settings.API_V1_STR)
+app.include_router(admin_router, prefix=settings.API_V1_STR)
+app.include_router(audit_router, prefix=settings.API_V1_STR)
+app.include_router(documents_router, prefix=settings.API_V1_STR)
+app.include_router(search_router, prefix=settings.API_V1_STR)
+app.include_router(rag_router, prefix=settings.API_V1_STR)
+app.include_router(guardrails_router, prefix=settings.API_V1_STR)
+app.include_router(graph_router, prefix=settings.API_V1_STR)
+app.include_router(evals_router, prefix=settings.API_V1_STR)
+app.include_router(quality_router, prefix=settings.API_V1_STR)
+
+# Admin-only /metrics route at root level
+@app.get("/metrics", tags=["Telemetry"], include_in_schema=False)
+async def root_metrics(admin_user: User = Depends(require_permission(PERM_READ_METRICS))):
+    return metrics.get_summary()
+
+# Root health check
 @app.get("/healthz", include_in_schema=False)
 async def root_healthz():
     return {"status": "healthy"}
-
-# Mount Public API Routers
-app.include_router(health_router, prefix=settings.API_V1_STR)
-app.include_router(auth_router, prefix=settings.API_V1_STR)
-
-# Mount Protected API Routers (enforcing JWT Bearer token authentication)
-app.include_router(documents_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
-app.include_router(search_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
-app.include_router(rag_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
-app.include_router(guardrails_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
-app.include_router(graph_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
-app.include_router(evals_router, prefix=settings.API_V1_STR, dependencies=[Depends(get_current_user)])
 
 # Serve Web UI
 @app.get("/", include_in_schema=False)
@@ -104,4 +128,4 @@ async def serve_ui():
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    return {"message": "Enterprise Hybrid RAG Pipeline API active. Visit /docs for OpenAPI documentation."}
+    return {"message": "SafeStrata API active. Visit /docs for OpenAPI documentation."}

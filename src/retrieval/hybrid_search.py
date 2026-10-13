@@ -5,7 +5,7 @@ from src.core.logging import logger
 from src.schemas.models import ScoredChunk, SearchMode
 from src.embeddings.provider import embedding_provider
 from src.vectorstore.chroma_store import vector_store
-from src.retrieval.bm25_search import bm25_engine
+from src.retrieval.bm25_search import bm25_manager
 from src.retrieval.reranker import reranker
 from src.retrieval.hyde import hyde_rewriter
 from src.retrieval.deduplicator import deduplicator
@@ -23,6 +23,7 @@ class HybridSearchEngine:
         mode: SearchMode = SearchMode.HYBRID,
         use_reranker: bool = True,
         use_hyde: bool = False,
+        role: Optional[str] = None,
         filter_metadata: Optional[Dict[str, Any]] = None
     ) -> List[ScoredChunk]:
         # Step 1: Query embedding (with optional HyDE)
@@ -36,19 +37,21 @@ class HybridSearchEngine:
         dense_results: List[ScoredChunk] = []
         sparse_results: List[ScoredChunk] = []
 
-        # Step 2: Dense retrieval
+        # Step 2: Dense retrieval (pre-filtered strictly by role)
         if mode in (SearchMode.HYBRID, SearchMode.DENSE):
             dense_results = vector_store.query_dense(
                 query_embedding=query_emb,
                 top_k=retrieval_limit,
+                role=role,
                 filter_metadata=filter_metadata
             )
 
-        # Step 3: Sparse retrieval
+        # Step 3: Sparse retrieval (pre-filtered strictly by role index)
         if mode in (SearchMode.HYBRID, SearchMode.SPARSE):
-            sparse_results = bm25_engine.search(
+            sparse_results = bm25_manager.search(
                 query=query,
-                top_k=retrieval_limit
+                top_k=retrieval_limit,
+                role=role
             )
 
         # Step 4: Fusion
@@ -65,7 +68,26 @@ class HybridSearchEngine:
             reranked_results = reranker.rerank(query=query, candidates=rerank_pool, top_k=retrieval_limit)
             fused_candidates = reranked_results
 
-        # Step 6: Context Deduplication
+        # Step 6: Strict RBAC post-verification invariant check
+        if role:
+            verified_candidates = []
+            for c in fused_candidates:
+                allowed = c.metadata.get("allowed_roles", "")
+                if isinstance(allowed, list):
+                    roles_list = allowed
+                elif isinstance(allowed, str):
+                    roles_list = [r.strip() for r in allowed.split(",")]
+                else:
+                    roles_list = []
+                
+                # If chunk has role flags or allowed_roles list
+                if role in roles_list or c.metadata.get(f"role_{role}", False):
+                    verified_candidates.append(c)
+                else:
+                    logger.critical(f"LEAKAGE PREVENTED: Blocked chunk {c.id} missing role '{role}' from reaching context.")
+            fused_candidates = verified_candidates
+
+        # Step 7: Context Deduplication
         deduped = deduplicator.deduplicate(fused_candidates, max_chunks=top_k)
         return deduped
 

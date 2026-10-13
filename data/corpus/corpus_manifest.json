@@ -1,0 +1,99 @@
+[
+  {
+    "id": "doc-rbi-kyc-2016",
+    "filename": "rbi_kyc_master_direction_2016.pdf",
+    "title": "RBI Master Direction - Know Your Customer (KYC) Direction, 2016",
+    "allowed_roles": [
+      "viewer",
+      "analyst",
+      "compliance_manager",
+      "auditor"
+    ],
+    "is_synthetic": false,
+    "effective_date": "2016-02-25",
+    "page_count": 102,
+    "description": "Official Reserve Bank of India Master Direction governing Customer Due Diligence, CIP, and KYC norms."
+  },
+  {
+    "id": "doc-rbi-it-framework-2023",
+    "filename": "rbi_it_governance_framework_2023.pdf",
+    "title": "RBI Master Direction on Information Technology Governance, Risk, Controls and Assurance Practices, 2023",
+    "allowed_roles": [
+      "analyst",
+      "compliance_manager",
+      "auditor"
+    ],
+    "is_synthetic": false,
+    "effective_date": "2023-11-07",
+    "page_count": 52,
+    "description": "Official RBI Master Direction on IT governance, cyber resilience, and IS audit standards."
+  },
+  {
+    "id": "doc-rbi-digital-lending-2022",
+    "filename": "rbi_digital_lending_guidelines_2022.pdf",
+    "title": "RBI Guidelines on Digital Lending, 2022",
+    "allowed_roles": [
+      "viewer",
+      "analyst",
+      "compliance_manager",
+      "auditor"
+    ],
+    "is_synthetic": false,
+    "effective_date": "2022-09-02",
+    "page_count": 36,
+    "description": "Official RBI regulatory framework on digital lending apps, loan disbursements, and consumer transparency."
+  },
+  {
+    "id": "doc-synthetic-hr-leave",
+    "filename": "synthetic_hr_leave_policy.pdf",
+    "title": "SafeStrata Employee Leave & Attendance Policy 2026 [SYNTHETIC FIXTURE]",
+    "allowed_roles": [
+      "viewer",
+      "analyst",
+      "compliance_manager",
+      "auditor"
+    ],
+    "is_synthetic": true,
+    "effective_date": "2026-01-01",
+    "page_count": 2,
+    "description": "Clearly labelled synthetic fixture detailing annual casual, privilege, and sick leave guidelines for all employees."
+  },
+  {
+    "id": "doc-synthetic-it-sec",
+    "filename": "synthetic_it_security_policy.pdf",
+    "title": "SafeStrata IT Security & Access Control Policy [SYNTHETIC FIXTURE]",
+    "allowed_roles": [
+      "analyst",
+      "compliance_manager",
+      "auditor"
+    ],
+    "is_synthetic": true,
+    "effective_date": "2026-02-15",
+    "page_count": 2,
+    "description": "Clearly labelled synthetic fixture specifying password requirements, MFA, and USB restrictions for analysts and managers."
+  },
+  {
+    "id": "doc-synthetic-audit-memo",
+    "filename": "synthetic_restricted_audit_memo.pdf",
+    "title": "SafeStrata Confidential Internal Audit AML Memo [SYNTHETIC FIXTURE]",
+    "allowed_roles": [
+      "compliance_manager"
+    ],
+    "is_synthetic": true,
+    "effective_date": "2026-03-01",
+    "page_count": 1,
+    "description": "Clearly labelled restricted synthetic fixture containing canary AUDIT_REF_AML_2026_XYZ99 for Compliance Managers only."
+  },
+  {
+    "id": "doc-synthetic-pii",
+    "filename": "synthetic_customer_data_with_pii.pdf",
+    "title": "SafeStrata Sample Customer Forms with Synthetic PII [SYNTHETIC FIXTURE]",
+    "allowed_roles": [
+      "compliance_manager"
+    ],
+    "is_synthetic": true,
+    "effective_date": "2026-01-10",
+    "page_count": 1,
+    "description": "Clearly labelled synthetic customer records with fake India PAN, Aadhaar, GSTIN, and phone numbers to test ingestion redaction."
+  }
+]

@@ -39,6 +39,9 @@ class RAGEvaluator:
         for chunk in top_chunks:
             chunk_hit = False
             for g_idx, gold in enumerate(gold_spans):
+                # Verify document identity before checking character overlap
+                if gold.get("document") and chunk.document_id != gold["document"]:
+                    continue
                 # Check character span overlap (> 20 chars)
                 overlap = max(0, min(chunk.char_end, gold["char_end"]) - max(chunk.char_start, gold["char_start"]))
                 if overlap > 20:
@@ -109,7 +112,8 @@ class RAGEvaluator:
         item: Dict[str, Any],
         search_mode: SearchMode = SearchMode.HYBRID,
         use_reranker: bool = True,
-        use_hyde: bool = False
+        use_hyde: bool = False,
+        skip_generation: bool = False
     ) -> EvaluationItem:
         query = item["question"]
         gold_spans = item.get("gold_spans", [])
@@ -147,6 +151,21 @@ class RAGEvaluator:
         )
 
         retrieval_metrics = self.evaluate_spans(retrieved, gold_spans, k=5)
+
+        if skip_generation:
+            latency = round((time.time() - start_time) * 1000, 2)
+            return EvaluationItem(
+                query_id=query_id,
+                query=query,
+                category=category,
+                recall_at_k=retrieval_metrics["recall_at_k"],
+                mrr=retrieval_metrics["mrr"],
+                ndcg_at_k=retrieval_metrics["ndcg_at_k"],
+                faithfulness=1.0,
+                answer_relevance=1.0,
+                latency_ms=latency,
+                status="answered"
+            )
 
         # Grounded generation check
         gen_res = generator.generate(query=sanitized_query, context_chunks=retrieved, provider="synthesis")

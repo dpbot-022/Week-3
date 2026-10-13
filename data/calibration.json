@@ -1,0 +1,90 @@
+{
+  "calibrated_at": "2026-10-13T15:59:52Z",
+  "split": "dev",
+  "dataset_hash": "c08fbf59a7ffa3bd05342b325f10a2505c287663a1d650d170ae3a603ea8d0f3",
+  "n_dev_queries": 23,
+  "optimal_relevance_threshold": 0.15,
+  "optimal_nli_support_threshold": 0.6,
+  "grid_search": [
+    {
+      "threshold": 0.15,
+      "tp": 8,
+      "fp": 0,
+      "tn": 4,
+      "fn": 11,
+      "precision": 1.0,
+      "recall": 0.4211,
+      "f1": 0.5926
+    },
+    {
+      "threshold": 0.2,
+      "tp": 8,
+      "fp": 0,
+      "tn": 4,
+      "fn": 11,
+      "precision": 1.0,
+      "recall": 0.4211,
+      "f1": 0.5926
+    },
+    {
+      "threshold": 0.25,
+      "tp": 8,
+      "fp": 0,
+      "tn": 4,
+      "fn": 11,
+      "precision": 1.0,
+      "recall": 0.4211,
+      "f1": 0.5926
+    },
+    {
+      "threshold": 0.3,
+      "tp": 8,
+      "fp": 0,
+      "tn": 4,
+      "fn": 11,
+      "precision": 1.0,
+      "recall": 0.4211,
+      "f1": 0.5926
+    },
+    {
+      "threshold": 0.35,
+      "tp": 8,
+      "fp": 0,
+      "tn": 4,
+      "fn": 11,
+      "precision": 1.0,
+      "recall": 0.4211,
+      "f1": 0.5926
+    },
+    {
+      "threshold": 0.4,
+      "tp": 8,
+      "fp": 0,
+      "tn": 4,
+      "fn": 11,
+      "precision": 1.0,
+      "recall": 0.4211,
+      "f1": 0.5926
+    },
+    {
+      "threshold": 0.45,
+      "tp": 8,
+      "fp": 0,
+      "tn": 4,
+      "fn": 11,
+      "precision": 1.0,
+      "recall": 0.4211,
+      "f1": 0.5926
+    },
+    {
+      "threshold": 0.5,
+      "tp": 8,
+      "fp": 0,
+      "tn": 4,
+      "fn": 11,
+      "precision": 1.0,
+      "recall": 0.4211,
+      "f1": 0.5926
+    }
+  ]
+}
