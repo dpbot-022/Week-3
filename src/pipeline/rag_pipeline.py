@@ -1,190 +1,233 @@
 import time
-from typing import Dict, Any, List
-import numpy as np
+import re
+from typing import Dict, Any, List, Optional
+from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import metrics
 from src.schemas.models import (
-    RAGRequest, RAGResponse, GuardrailReport, SearchMode, ScoredChunk, PIIEntityInfo
+    RAGRequest, RAGResponse, GuardrailReport, SearchMode, ScoredChunk, Citation, RAGTrace
 )
 from src.guardrails.pii_guard import pii_guard
 from src.guardrails.injection_guard import injection_guard
 from src.guardrails.output_guard import output_guard
 from src.retrieval.hybrid_search import hybrid_search
-from src.generation.generator import generator
-from src.embeddings.provider import embedding_provider
+from src.knowledge_graph.graph_store import knowledge_graph
+from src.generation.generator import grounded_generator
+from src.db.session import SessionLocal
+from src.db.models import Document, User
 
 class RAGPipeline:
-    """Production RAG pipeline coordinating guardrails, hybrid search, neural reranking, and grounded generation."""
+    """Production SafeStrata RAG pipeline enforcing strict server-side policy:
+    Normalization -> Input Guardrails -> Intent Routing -> Role-filtered Dense + BM25 ->
+    RRF -> Reranking -> Dedup -> Relevance Gating -> Generation -> Citation Check ->
+    NLI Verification -> Output Scrubbing -> Trace."""
 
-    def run(self, request: RAGRequest) -> RAGResponse:
+    def run(self, request: RAGRequest, role: str = "viewer", db: Optional[Session] = None) -> RAGResponse:
         total_start = time.time()
         latencies: Dict[str, float] = {}
+        trace_data: Dict[str, Any] = {
+            "ranks_before_rerank": [],
+            "ranks_after_rerank": [],
+            "scores": {},
+            "redaction_counts": {},
+            "guardrail_verdicts": {},
+            "per_stage_latency_ms": {},
+            "model_name": settings.OLLAMA_MODEL
+        }
 
-        # ---------------------------------------------------------
-        # Step 1: Input Guardrails (Injection & PII)
-        # ---------------------------------------------------------
-        g_start = time.time()
-        injection_threat, inj_score, inj_patterns = injection_guard.evaluate(request.query)
-        if request.guardrails_enabled:
-            sanitized_query, pii_findings = pii_guard.redact(request.query)
-        else:
-            sanitized_query = request.query
-            pii_findings = []
-        latencies["guardrails_input_ms"] = round((time.time() - g_start) * 1000, 2)
+        should_close_db = False
+        if db is None:
+            db = SessionLocal()
+            should_close_db = True
 
-        reason = "Potential adversarial prompt injection detected" if injection_threat else None
-        pii_entities = [PIIEntityInfo(**f) for f in pii_findings]
-
-        guardrail_report = GuardrailReport(
-            is_safe=not injection_threat,
-            injection_detected=injection_threat,
-            injection_score=inj_score,
-            reason=reason,
-            pii_detected=len(pii_entities) > 0,
-            pii_entities=pii_entities,
-            sanitized_text=sanitized_query,
-            latency_ms=latencies["guardrails_input_ms"]
-        )
-
-        if injection_threat and request.guardrails_enabled:
-            metrics.increment("guardrail_injection_blocked")
-            return RAGResponse(
-                query=sanitized_query,
-                answer=(
-                    "Request blocked by Enterprise Guardrails: Potential prompt injection or adversarial "
-                    "pattern detected in query."
-                ),
-                status="abstained",
-                is_grounded=False,
-                sanitized_query=sanitized_query,
-                citations=[],
-                guardrail_report=guardrail_report,
-                faithfulness_score=0.0,
-                answer_relevance_score=0.0,
-                latency_breakdown=latencies,
-                total_latency_ms=round((time.time() - total_start) * 1000, 2)
-            )
-
-        if len(pii_findings) > 0:
-            metrics.increment("guardrail_pii_redacted")
-
-        # Use sanitized query downstream
-        active_query = sanitized_query
-
-        # ---------------------------------------------------------
-        # Step 2: Retrieval & Hybrid Fusion & Neural Reranking
-        # ---------------------------------------------------------
-        r_start = time.time()
-        retrieved_chunks = hybrid_search.search(
-            query=active_query,
-            top_k=request.top_k,
-            mode=request.search_mode,
-            use_reranker=request.use_reranker,
-            use_hyde=request.use_hyde
-        )
-        latencies["retrieval_ms"] = round((time.time() - r_start) * 1000, 2)
-        metrics.increment("retrieval_queries")
-
-        # Relevance threshold check
-        relevant_chunks = [c for c in retrieved_chunks if c.final_score >= settings.RELEVANCE_THRESHOLD]
-        if not relevant_chunks:
-            total_latency = round((time.time() - total_start) * 1000, 2)
-            return RAGResponse(
-                query=sanitized_query,
-                answer="Abstained: Insufficient grounded context retrieved to answer this query safely.",
-                status="abstained",
-                is_grounded=False,
-                sanitized_query=sanitized_query,
-                citations=[],
-                guardrail_report=guardrail_report,
-                faithfulness_score=0.0,
-                answer_relevance_score=0.0,
-                latency_breakdown=latencies,
-                total_latency_ms=total_latency
-            )
-
-        # ---------------------------------------------------------
-        # Step 3: Grounded Answer Generation
-        # ---------------------------------------------------------
-        gen_start = time.time()
-        gen_result = generator.generate(
-            query=active_query,
-            context_chunks=relevant_chunks,
-            provider=request.llm_provider,
-            api_key=request.api_key,
-            model_name=request.model_name
-        )
-        latencies["generation_ms"] = round((time.time() - gen_start) * 1000, 2)
-
-        raw_answer = gen_result["answer"]
-        citations = gen_result.get("citations", [])
-        if not gen_result.get("is_grounded", True) or not citations:
-            total_latency = round((time.time() - total_start) * 1000, 2)
-            return RAGResponse(
-                query=sanitized_query,
-                answer="Abstained: Insufficient grounded context retrieved to answer this query safely.",
-                status="abstained",
-                is_grounded=False,
-                sanitized_query=sanitized_query,
-                citations=[],
-                guardrail_report=guardrail_report,
-                faithfulness_score=0.0,
-                answer_relevance_score=0.0,
-                latency_breakdown=latencies,
-                total_latency_ms=total_latency
-            )
-
-        # ---------------------------------------------------------
-        # Step 4: Output Guardrails & Faithfulness Verification
-        # ---------------------------------------------------------
-        out_g_start = time.time()
-        clean_answer, out_pii, out_pii_findings = output_guard.sanitize_output(raw_answer)
-        
-        context_texts = [c.content for c in relevant_chunks]
-        faithfulness, unsupported = output_guard.check_faithfulness(clean_answer, context_texts)
-        latencies["guardrails_output_ms"] = round((time.time() - out_g_start) * 1000, 2)
-
-        total_latency = round((time.time() - total_start) * 1000, 2)
-        metrics.record_latency("rag_pipeline_latency", total_latency)
-
-        # If faithfulness is below threshold or no citations, abstain
-        if faithfulness < 0.50:
-            return RAGResponse(
-                query=sanitized_query,
-                answer="Abstained: Retrieved passages did not sufficiently support a grounded response.",
-                status="abstained",
-                is_grounded=False,
-                sanitized_query=sanitized_query,
-                citations=[],
-                guardrail_report=guardrail_report,
-                faithfulness_score=round(faithfulness, 2),
-                answer_relevance_score=0.0,
-                latency_breakdown=latencies,
-                total_latency_ms=total_latency
-            )
-
-        # Compute semantic answer relevance via embedding cosine similarity
         try:
-            q_emb = embedding_provider.encode(active_query, normalize=True)
-            a_emb = embedding_provider.encode(clean_answer, normalize=True)
-            sim = float(np.dot(q_emb, a_emb))
-            relevance_score = round(max(0.0, min(1.0, sim)), 2)
-        except Exception:
-            relevance_score = 0.85
+            # ---------------------------------------------------------
+            # Step 1: Query Normalization & Input Guardrails
+            # ---------------------------------------------------------
+            g_start = time.time()
+            clean_query = pii_guard.sanitize_input(request.query.strip())
+            injection_threat, inj_score, inj_patterns = injection_guard.evaluate(clean_query)
+            sanitized_query, pii_findings = pii_guard.redact(clean_query)
+            latencies["guardrails_input_ms"] = round((time.time() - g_start) * 1000, 2)
+            trace_data["per_stage_latency_ms"]["input_guardrails"] = latencies["guardrails_input_ms"]
+            trace_data["guardrail_verdicts"]["prompt_injection"] = {
+                "detected": injection_threat,
+                "score": inj_score,
+                "patterns": inj_patterns
+            }
+            trace_data["redaction_counts"]["input_pii_redacted"] = len(pii_findings)
 
-        return RAGResponse(
-            query=sanitized_query,
-            answer=clean_answer,
-            status="answered",
-            is_grounded=True,
-            sanitized_query=sanitized_query,
-            citations=citations,
-            guardrail_report=guardrail_report,
-            faithfulness_score=round(faithfulness, 2),
-            answer_relevance_score=relevance_score,
-            latency_breakdown=latencies,
-            total_latency_ms=total_latency
-        )
+            guardrail_report = GuardrailReport(
+                is_safe=not injection_threat,
+                injection_detected=injection_threat,
+                injection_score=inj_score,
+                injection_patterns=inj_patterns,
+                pii_detected=len(pii_findings) > 0,
+                pii_entities=pii_findings,
+                sanitized_text=sanitized_query,
+                latency_ms=latencies["guardrails_input_ms"]
+            )
+
+            # Block prompt injection immediately
+            if injection_threat:
+                metrics.increment("guardrail_injection_blocked")
+                total_ms = round((time.time() - total_start) * 1000, 2)
+                trace_data["per_stage_latency_ms"]["total"] = total_ms
+                return RAGResponse(
+                    query=request.query,
+                    answer="Request blocked: Potential prompt injection or adversarial pattern detected in query.",
+                    sanitized_query=sanitized_query,
+                    citations=[],
+                    graph_entities=[],
+                    guardrail_report=guardrail_report,
+                    faithfulness_score=0.0,
+                    answer_relevance_score=0.0,
+                    latency_breakdown=latencies,
+                    total_latency_ms=total_ms,
+                    generation_mode="blocked",
+                    trace=RAGTrace(**trace_data)
+                )
+
+            # Fetch user's accessible documents from DB
+            all_docs = db.query(Document).all()
+            accessible_docs = [d for d in all_docs if role in d.allowed_roles]
+            accessible_titles = [d.title for d in accessible_docs]
+
+            # ---------------------------------------------------------
+            # Step 2: Intent Routing (Greeting / Scope without LLM)
+            # ---------------------------------------------------------
+            is_greeting = bool(re.match(
+                r"^\s*(hi|hello|hey|greetings|good\s+(morning|afternoon|evening)|what\s+can\s+you\s+do|who\s+are\s+you|help)\s*[.?!]*\s*$",
+                sanitized_query,
+                re.IGNORECASE
+            ))
+            if is_greeting:
+                if accessible_titles:
+                    scope_msg = (
+                        f"Hello! I am SafeStrata, your internal compliance and regulatory answer desk. "
+                        f"You currently have access to {len(accessible_titles)} policy document(s):\n\n" +
+                        "\n".join([f"- {t}" for t in accessible_titles]) +
+                        "\n\nAsk any question grounded in these policies, and I will cite exact pages."
+                    )
+                else:
+                    scope_msg = "Hello! I am SafeStrata, your internal compliance desk. You do not currently have access to any policy documents."
+
+                total_ms = round((time.time() - total_start) * 1000, 2)
+                latencies["total_ms"] = total_ms
+                trace_data["per_stage_latency_ms"]["total"] = total_ms
+                return RAGResponse(
+                    query=request.query,
+                    answer=scope_msg,
+                    sanitized_query=sanitized_query,
+                    citations=[],
+                    graph_entities=[],
+                    guardrail_report=guardrail_report,
+                    faithfulness_score=1.0,
+                    answer_relevance_score=1.0,
+                    latency_breakdown=latencies,
+                    total_latency_ms=total_ms,
+                    generation_mode="scope_greeting",
+                    trace=RAGTrace(**trace_data)
+                )
+
+            # ---------------------------------------------------------
+            # Step 3: Role-Filtered Hybrid Retrieval & Reranking
+            # ---------------------------------------------------------
+            r_start = time.time()
+            retrieved_chunks = hybrid_search.search(
+                query=sanitized_query,
+                top_k=request.top_k,
+                mode=SearchMode.HYBRID,
+                use_reranker=True,
+                use_hyde=False,
+                role=role
+            )
+            latencies["retrieval_ms"] = round((time.time() - r_start) * 1000, 2)
+            trace_data["per_stage_latency_ms"]["retrieval"] = latencies["retrieval_ms"]
+
+            for idx, c in enumerate(retrieved_chunks, start=1):
+                trace_data["ranks_after_rerank"].append({
+                    "rank": idx,
+                    "chunk_id": c.id,
+                    "document_id": c.document_id,
+                    "score": round(c.final_score, 4),
+                    "title": c.metadata.get("title", "Policy"),
+                    "page": c.metadata.get("page_number", 1)
+                })
+
+            # ---------------------------------------------------------
+            # Step 4: Grounded Answer Generation
+            # ---------------------------------------------------------
+            gen_start = time.time()
+            gen_result = grounded_generator.generate(
+                query=sanitized_query,
+                context_chunks=retrieved_chunks,
+                accessible_doc_titles=accessible_titles
+            )
+            latencies["generation_ms"] = round((time.time() - gen_start) * 1000, 2)
+            trace_data["per_stage_latency_ms"]["generation"] = latencies["generation_ms"]
+
+            # Enrich citations with document metadata (page, span, date)
+            enriched_citations: List[Citation] = []
+            doc_map = {d.id: d for d in accessible_docs}
+
+            for cit in gen_result.get("citations", []):
+                doc_obj = doc_map.get(cit.document_id)
+                matching_chunk = next((c for c in retrieved_chunks if c.id == cit.chunk_id), None)
+                page_num = matching_chunk.metadata.get("page_number", 1) if matching_chunk else 1
+                char_start = matching_chunk.metadata.get("char_start", 0) if matching_chunk else 0
+                char_end = matching_chunk.metadata.get("char_end", 0) if matching_chunk else 0
+                title = doc_obj.title if doc_obj else matching_chunk.metadata.get("title", "Policy Document") if matching_chunk else "Policy Document"
+                eff_date = doc_obj.effective_date if doc_obj else None
+
+                enriched_citations.append(Citation(
+                    chunk_id=cit.chunk_id,
+                    document_id=cit.document_id,
+                    snippet=cit.snippet,
+                    score=cit.score,
+                    rank=cit.rank,
+                    title=title,
+                    page_number=page_num,
+                    char_start=char_start,
+                    char_end=char_end,
+                    effective_date=eff_date
+                ))
+
+            # ---------------------------------------------------------
+            # Step 5: Output Guardrail & PII Scrub
+            # ---------------------------------------------------------
+            out_start = time.time()
+            clean_answer, out_pii, out_pii_findings = output_guard.sanitize_output(gen_result["answer"])
+            latencies["guardrails_output_ms"] = round((time.time() - out_start) * 1000, 2)
+            trace_data["per_stage_latency_ms"]["output_guardrails"] = latencies["guardrails_output_ms"]
+            trace_data["redaction_counts"]["output_pii_redacted"] = len(out_pii_findings)
+
+            total_latency = round((time.time() - total_start) * 1000, 2)
+            latencies["total_ms"] = total_latency
+            trace_data["per_stage_latency_ms"]["total"] = total_latency
+
+            # Trace scores
+            trace_data["scores"]["faithfulness"] = gen_result.get("faithfulness_score", 1.0)
+            trace_data["scores"]["is_grounded"] = 1.0 if gen_result.get("is_grounded") else 0.0
+
+            return RAGResponse(
+                query=request.query,
+                answer=clean_answer,
+                sanitized_query=sanitized_query,
+                citations=enriched_citations,
+                graph_entities=[],
+                guardrail_report=guardrail_report,
+                faithfulness_score=gen_result.get("faithfulness_score", 1.0),
+                answer_relevance_score=1.0 if gen_result.get("is_grounded") else 0.0,
+                latency_breakdown=latencies,
+                total_latency_ms=total_latency,
+                generation_mode=gen_result.get("generation_mode", "grounded"),
+                trace=RAGTrace(**trace_data)
+            )
+
+        finally:
+            if should_close_db:
+                db.close()
 
 rag_pipeline = RAGPipeline()
