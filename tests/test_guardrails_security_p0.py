@@ -114,22 +114,22 @@ def test_authenticated_audit_endpoint_requires_token():
     assert "injection_patterns" in data
     assert len(data["injection_patterns"]) >= 1
 
-def test_guardrails_fail_when_disabled():
-    """Verifies that disabling guardrails explicitly lets unmasked query pass through."""
+def test_guardrails_fail_when_disabled(monkeypatch):
+    """Verifies that removing the guardrail control lets unmasked PII query pass through."""
     pii_text = f"Contact {FAKE_EMAIL} immediately."
     
     # When enabled -> redacted
     res_enabled = client.post("/api/v1/rag/query", json={
         "query": pii_text,
-        "guardrails_enabled": True
     }, headers=auth_headers)
     assert res_enabled.status_code == 200
     assert FAKE_EMAIL not in res_enabled.json()["sanitized_query"]
 
-    # When disabled -> raw text passed into sanitized_query
+    # When control is removed via monkeypatch -> raw text passes through
+    from src.pipeline.rag_pipeline import pii_guard
+    monkeypatch.setattr(pii_guard, "redact", lambda text: (text, []))
     res_disabled = client.post("/api/v1/rag/query", json={
         "query": pii_text,
-        "guardrails_enabled": False
     }, headers=auth_headers)
     assert res_disabled.status_code == 200
     assert FAKE_EMAIL in res_disabled.json()["sanitized_query"]
