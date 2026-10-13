@@ -52,6 +52,8 @@ class ChromaVectorStore:
                 "chunk_index": chunk.chunk_index,
                 "strategy": chunk.strategy.value if hasattr(chunk.strategy, "value") else str(chunk.strategy),
                 "character_count": chunk.character_count,
+                "char_start": chunk.char_start,
+                "char_end": chunk.char_end,
                 "page_number": int(chunk.metadata.get("page_number", 1)),
                 "title": str(chunk.metadata.get("title", "Document")),
                 "allowed_roles": ",".join(roles),
@@ -133,6 +135,8 @@ class ChromaVectorStore:
             dist = distances[i] if distances else 0.0
             dense_sim = max(0.0, min(1.0, 1.0 - dist))
             doc_id = meta.get("document_id", "unknown")
+            c_start = int(meta.get("char_start", meta.get("meta_char_start", 0)))
+            c_end = int(meta.get("char_end", meta.get("meta_char_end", 0)))
 
             scored_chunks.append(ScoredChunk(
                 id=ids[i],
@@ -140,7 +144,9 @@ class ChromaVectorStore:
                 content=docs[i],
                 metadata=meta,
                 dense_score=dense_sim,
-                final_score=dense_sim
+                final_score=dense_sim,
+                char_start=c_start,
+                char_end=c_end
             ))
 
         return scored_chunks[:top_k]

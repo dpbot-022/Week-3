@@ -39,6 +39,9 @@ class RAGEvaluator:
         for chunk in top_chunks:
             chunk_hit = False
             for g_idx, gold in enumerate(gold_spans):
+                # Verify document identity before checking character overlap
+                if gold.get("document") and chunk.document_id != gold["document"]:
+                    continue
                 # Check character span overlap (> 20 chars)
                 overlap = max(0, min(chunk.char_end, gold["char_end"]) - max(chunk.char_start, gold["char_start"]))
                 if overlap > 20:

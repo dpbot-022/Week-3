@@ -102,4 +102,17 @@ class Settings(BaseSettings):
         if not self.DATABASE_URL:
             self.DATABASE_URL = f"sqlite:///{self.SQLITE_DB_PATH}"
 
+        calib_file = BASE_DIR / "data" / "calibration.json"
+        if calib_file.exists():
+            try:
+                import json
+                with open(calib_file, "r", encoding="utf-8") as f:
+                    calib_data = json.load(f)
+                if "optimal_relevance_threshold" in calib_data:
+                    self.RELEVANCE_THRESHOLD = float(calib_data["optimal_relevance_threshold"])
+                if "optimal_nli_support_threshold" in calib_data:
+                    self.NLI_SUPPORT_THRESHOLD = float(calib_data["optimal_nli_support_threshold"])
+            except Exception:
+                pass
+
 settings = Settings()

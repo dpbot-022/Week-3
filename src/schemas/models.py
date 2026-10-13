@@ -239,7 +239,13 @@ class BenchmarkReport(StrictBaseModel):
     evaluations: List[EvaluationItem] = Field(default_factory=list)
     metrics: Optional[Dict[str, BootstrapCI]] = None
     latency: Optional[Dict[str, float]] = None
+    per_stage_latency_ms: Optional[Dict[str, float]] = None
     ablations: Optional[Dict[str, Dict[str, BootstrapCI]]] = None
+    guardrail_metrics: Optional[Dict[str, Any]] = None
+    abstention_metrics: Optional[Dict[str, float]] = None
+    citation_validity_rate: Optional[float] = None
+    restricted_evidence_leak_rate: Optional[float] = None
     aggregate_metrics: Optional[Dict[str, Dict[str, float]]] = None
     best_performing_mode: Optional[str] = None
     analysis: Optional[str] = None
+

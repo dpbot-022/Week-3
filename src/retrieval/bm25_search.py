@@ -95,6 +95,8 @@ class RoleBM25Manager:
                 "document_id": c.document_id,
                 "chunk_index": c.chunk_index,
                 "page_number": c.page_number,
+                "char_start": c.char_start,
+                "char_end": c.char_end,
                 "allowed_roles": roles,
             }
             chunk_data = {
