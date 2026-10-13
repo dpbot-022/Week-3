@@ -6,7 +6,7 @@ from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import metrics
 from src.schemas.models import (
-    RAGRequest, RAGResponse, GuardrailReport, SearchMode, ScoredChunk, Citation, RAGTrace
+    RAGRequest, RAGResponse, GuardrailReport, SearchMode, ScoredChunk, Citation, RAGTrace, PIIEntityInfo
 )
 from src.guardrails.pii_guard import pii_guard
 from src.guardrails.injection_guard import injection_guard
@@ -58,13 +58,18 @@ class RAGPipeline:
             }
             trace_data["redaction_counts"]["input_pii_redacted"] = len(pii_findings)
 
+            pii_entities_info = [
+                PIIEntityInfo(entity_type=f["entity_type"], start=f["start"], end=f["end"], count=1)
+                for f in pii_findings
+            ]
+
             guardrail_report = GuardrailReport(
                 is_safe=not injection_threat,
                 injection_detected=injection_threat,
                 injection_score=inj_score,
-                injection_patterns=inj_patterns,
-                pii_detected=len(pii_findings) > 0,
-                pii_entities=pii_findings,
+                reason="Potential adversarial prompt injection detected" if injection_threat else None,
+                pii_detected=len(pii_entities_info) > 0,
+                pii_entities=pii_entities_info,
                 sanitized_text=sanitized_query,
                 latency_ms=latencies["guardrails_input_ms"]
             )
@@ -75,8 +80,10 @@ class RAGPipeline:
                 total_ms = round((time.time() - total_start) * 1000, 2)
                 trace_data["per_stage_latency_ms"]["total"] = total_ms
                 return RAGResponse(
-                    query=request.query,
+                    query=sanitized_query,
                     answer="Request blocked: Potential prompt injection or adversarial pattern detected in query.",
+                    status="blocked",
+                    is_grounded=False,
                     sanitized_query=sanitized_query,
                     citations=[],
                     graph_entities=[],
@@ -117,7 +124,7 @@ class RAGPipeline:
                 latencies["total_ms"] = total_ms
                 trace_data["per_stage_latency_ms"]["total"] = total_ms
                 return RAGResponse(
-                    query=request.query,
+                    query=sanitized_query,
                     answer=scope_msg,
                     sanitized_query=sanitized_query,
                     citations=[],
@@ -211,15 +218,20 @@ class RAGPipeline:
             trace_data["scores"]["faithfulness"] = gen_result.get("faithfulness_score", 1.0)
             trace_data["scores"]["is_grounded"] = 1.0 if gen_result.get("is_grounded") else 0.0
 
+            is_grounded = gen_result.get("is_grounded", True)
+            status = "answered" if is_grounded else "abstained"
+
             return RAGResponse(
-                query=request.query,
+                query=sanitized_query,
                 answer=clean_answer,
+                status=status,
+                is_grounded=is_grounded,
                 sanitized_query=sanitized_query,
                 citations=enriched_citations,
                 graph_entities=[],
                 guardrail_report=guardrail_report,
                 faithfulness_score=gen_result.get("faithfulness_score", 1.0),
-                answer_relevance_score=1.0 if gen_result.get("is_grounded") else 0.0,
+                answer_relevance_score=1.0 if is_grounded else 0.0,
                 latency_breakdown=latencies,
                 total_latency_ms=total_latency,
                 generation_mode=gen_result.get("generation_mode", "grounded"),

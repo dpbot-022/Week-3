@@ -73,7 +73,7 @@ class BenchmarkRunner:
 
         # Warm-up phase (5 queries excluded from latency benchmarks)
         for warm_item in test_items[:min(5, len(test_items))]:
-            evaluator.evaluate_single(warm_item, search_mode=SearchMode.HYBRID, use_reranker=True)
+            evaluator.evaluate_single(warm_item, search_mode=SearchMode.HYBRID, use_reranker=True, skip_generation=True)
 
         # Primary architecture: Hybrid + Neural Cross-Encoder Reranker
         latencies: List[float] = []
@@ -121,7 +121,7 @@ class BenchmarkRunner:
             ab_faiths = []
             ab_relevs = []
             for item in test_items:
-                res = evaluator.evaluate_single(item, search_mode=mode, use_reranker=use_rr, use_hyde=use_hy)
+                res = evaluator.evaluate_single(item, search_mode=mode, use_reranker=use_rr, use_hyde=use_hy, skip_generation=True)
                 ab_recalls.append(res.recall_at_k)
                 ab_mrrs.append(res.mrr)
                 ab_ndcgs.append(res.ndcg_at_k)

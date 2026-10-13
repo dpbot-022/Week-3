@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -57,11 +57,21 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     
     # Auth & RBAC
+    APP_ENV: str = "development"
     JWT_SECRET: str = "safestrata-secure-internal-compliance-key-2026-jwt-token"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    ADMIN_EMAILS: List[str] = ["admin@safestrata.internal", "admin@bank.com"]
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    JWT_ISSUER: str = "safestrata-auth"
+    JWT_AUDIENCE: str = "safestrata-app"
+    OTP_PEPPER: str = "safestrata-otp-server-pepper-secret-2026"
+    OTP_EXPIRE_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 5
+    OTP_RESEND_COOLDOWN_SECONDS: int = 60
+    AUDIT_TOKEN: str = "safestrata-audit-secret-token"
+    ADMIN_EMAILS: List[str] = ["admin@safestrata.internal", "admin@bank.com", "admin@safestrata.local"]
     
     # Ollama & Local AI
     OLLAMA_BASE_URL: str = "http://localhost:11434"
@@ -71,12 +81,16 @@ class Settings(BaseSettings):
     NLI_SUPPORT_THRESHOLD: float = 0.5
     
     # Email / SMTP
-    SMTP_HOST: str = ""
+    SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
     SMTP_USER: str = ""
-    SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "SafeStrata Compliance Desk <no-reply@safestrata.internal>"
     SMTP_USE_TLS: bool = True
+    SMTP_STARTTLS: bool = True
+    SMTP_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: float = 10.0
 
     model_config = {
         "env_file": ".env",

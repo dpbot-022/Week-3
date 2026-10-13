@@ -173,13 +173,20 @@ async def upload_document(
     }
 
 @router.post("/preview-chunking")
-def preview_chunking(payload: ChunkPreviewRequest):
+def preview_chunking(
+    payload: ChunkPreviewRequest,
+    current_user: User = Depends(require_permission(PERM_READ_DOCUMENTS))
+):
     chunker = get_chunker(strategy=payload.strategy, chunk_size=payload.chunk_size, chunk_overlap=payload.chunk_overlap, embedding_provider=embedding_provider)
     chunks = chunker.chunk(payload.text, "preview_doc")
     return {
         "chunk_count": len(chunks),
         "chunks": [c.dict() for c in chunks]
     }
+
+@router.post("/reset")
+def reset_database(current_user: User = Depends(require_permission(PERM_MANAGE_DOCUMENTS))):
+    raise HTTPException(status_code=405, detail="Global Clear Database is disabled by policy. Use per-document delete.")
 
 @router.post("/ingest")
 def ingest_document(

@@ -34,7 +34,12 @@ def get_current_user(
         )
 
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.JWT_ALGORITHM],
+            options={"verify_aud": False, "verify_iss": False}
+        )
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -48,8 +53,8 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    email = payload.get("sub")
-    if not email:
+    sub = payload.get("sub")
+    if not sub:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload.",
@@ -57,7 +62,21 @@ def get_current_user(
         )
 
     # CRITICAL SECURITY RULE: Resolve role and account status dynamically from the database on EVERY request!
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(User).filter((User.email == sub) | (User.id == sub)).first()
+    if not user:
+        try:
+            from src.auth.store import auth_store
+            mem_user = auth_store.get_user_by_id(sub)
+            if mem_user:
+                user = db.query(User).filter(User.email == mem_user.email).first()
+                if not user:
+                    user = User(id=mem_user.id, email=mem_user.email, role="analyst", role_version=1, is_active=True)
+                    db.add(user)
+                    db.commit()
+                    db.refresh(user)
+        except Exception:
+            pass
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

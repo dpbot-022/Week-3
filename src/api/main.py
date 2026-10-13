@@ -117,6 +117,11 @@ app.include_router(quality_router, prefix=settings.API_V1_STR)
 async def root_metrics(admin_user: User = Depends(require_permission(PERM_READ_METRICS))):
     return metrics.get_summary()
 
+# Root health check
+@app.get("/healthz", include_in_schema=False)
+async def root_healthz():
+    return {"status": "healthy"}
+
 # Serve Web UI
 @app.get("/", include_in_schema=False)
 async def serve_ui():

@@ -9,6 +9,7 @@ from src.db.models import User
 router = APIRouter(tags=["Health & Telemetry"])
 
 @router.get("/health")
+@router.get("/healthz")
 async def health_check():
     """Health check endpoint providing vector store status, model info, and uptime."""
     doc_count = vector_store.count()

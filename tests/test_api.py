@@ -48,7 +48,7 @@ def test_guardrails_check_endpoint():
         "check_pii": True,
         "check_injection": True
     }
-    response = client.post("/api/v1/guardrails/check", json=payload)
+    response = client.post("/api/v1/guardrails/check", json=payload, headers=get_auth_headers("analyst"))
     assert response.status_code == 200
     data = response.json()
     assert data["pii_detected"] is True
@@ -62,7 +62,7 @@ def test_preview_chunking_endpoint():
         "chunk_size": 50,
         "chunk_overlap": 5
     }
-    response = client.post("/api/v1/documents/preview-chunking", json=payload)
+    response = client.post("/api/v1/documents/preview-chunking", json=payload, headers=get_auth_headers("analyst"))
     assert response.status_code == 200
     data = response.json()
     assert data["chunk_count"] >= 2
@@ -114,7 +114,7 @@ def test_ingest_and_rag_query():
     assert del_res.status_code == 200
 
 def test_benchmark_endpoint():
-    res = client.post("/api/v1/evaluations/benchmark")
+    res = client.post("/api/v1/evaluations/benchmark", headers=get_auth_headers("analyst"))
     assert res.status_code == 200
     data = res.json()
     assert "aggregate_metrics" in data
@@ -145,5 +145,7 @@ def test_search_with_hyde_and_reranker():
 
 def test_global_reset_disallowed():
     """Verify that no global Clear Database route exists (only per-document delete is allowed)."""
-    res = client.post("/api/v1/documents/reset")
-    assert res.status_code in [404, 405]
+    res_unauth = client.post("/api/v1/documents/reset")
+    assert res_unauth.status_code == 401
+    res_auth = client.post("/api/v1/documents/reset", headers=get_auth_headers("compliance_manager"))
+    assert res_auth.status_code in [404, 405]
